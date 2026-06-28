@@ -18,6 +18,11 @@ static std::vector<std::wstring> g_deployedFiles;
 static HANDLE g_LogFileHandle = INVALID_HANDLE_VALUE;
 static std::mutex g_LogMutex;
 
+// Build-time switch for the startup author notice. Set to 0 and rebuild to disable it.
+#ifndef NEPGEAR_ENABLE_STARTUP_POPUP
+#define NEPGEAR_ENABLE_STARTUP_POPUP 1
+#endif
+
 static void DebugPrintW(const wchar_t* format, ...) {
     wchar_t wbuf[2048];
     va_list args;
@@ -156,6 +161,7 @@ namespace Utils {
     }
 
     void ShowStartupPopup() {
+#if NEPGEAR_ENABLE_STARTUP_POPUP
         if (!Config::IsSystemEnabled) return;
 
         const wchar_t* const popupTitle = L"游玩通知";
@@ -172,6 +178,7 @@ namespace Utils {
             CleanupPatchFiles();
             ExitProcess(0);
         }
+#endif
     }
 
     static void LogInternal(LogLevel level, const wchar_t* message) {
