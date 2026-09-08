@@ -1,154 +1,211 @@
 # Nepgear
 
-**Nepgear** 是一个专为日语 Galgame（视觉小说）设计的通用 DLL 劫持与 Hook 框架。
+面向日文 Galgame 的 DLL 劫持与 Hook 框架。伪装成 `winmm.dll` 随游戏启动，提供区域模拟、字体替换、文本转换、文件重定向和引擎专用适配。
 
-通过劫持系统 DLL（默认 `winmm.dll`），Nepgear 可以自动随游戏启动，并提供区域模拟、字体替换、文件重定向等强大功能。
+支持 x86 / x64。多数 Galgame 为 32 位，通常用 x86 版本。
 
-## ✨ 主要功能
+## 功能概览
 
-*   **DLL 劫持加载**：利用 `winmm.dll` 代理技术，无需修改游戏原有可执行文件即可自动加载。
-*   **区域模拟 (Locale Emulator)**：
-    *   内置区域模拟功能，可在非日语系统上直接运行 Shift-JIS 编码的日语游戏。
-    *   支持模拟 Shift-JIS (932) 或 GBK (936) 环境。
-*   **高级字体挂钩 (Font Hook)**：
-    *   动态替换游戏字体（默认 `galgame_cnjp.ttf`）。
-    *   支持自定义字体大小缩放（宽高比调整）。
-    *   支持字体粗细调整。
-    *   强制指定字符集（解决乱码问题）。
-*   **窗口标题修改**：自定义游戏窗口标题，支持 Unicode。
-*   **虚拟文件系统 (VFS) & 文件重定向**：
-    *   将游戏读取的文件重定向到外部文件夹（如 `Nepgear/`）。
-    *   支持读取打包的 `.chs` 资源包（类似封包汉化）。
-    *   优先读取外部文件，方便替换游戏资源（图片、脚本等）。
+| 模块 | 说明 |
+| --- | --- |
+| DLL 代理 | 伪装 `winmm.dll`，导出转发给系统真实 DLL，不改动游戏文件 |
+| 区域模拟 | 内置 Locale Emulator Plus，以日文 locale 重启进程 |
+| 字体 Hook | 替换字体、缩放、字重、字距、垂直度量、字符集伪装 |
+| 文本替换 | 日文旧字体↔繁体、繁简互转，共三张映射表 |
+| 代码页重定向 | 在 `MultiByteToWideChar` / `WideCharToMultiByte` 边界改码页 |
+| 引擎适配 | 15 个引擎的专用字体处理（见下表） |
+| 窗口标题 | 三种模式改写标题，支持 Unicode |
+| VFS 与重定向 | 优先读外部文件夹或 `.chs` 封包 |
 
-## 🛠️ 构建指南
+### 已适配引擎
 
-### 环境要求
-*   Visual Studio 2022 (v143 工具集)
-*   Windows SDK
+BGI / Buriko、Artemis（含 Legacy）、KiriKiri / TVP、EntisGLS、Softpal、Escu:de、Mirai、Majiro、DxLib、TinkerBell、CatSystem2、Unity（Mono / IL2CPP / TextMeshPro）、TyranoScript 5 / Electron、Ren'Py、YU-RIS。
 
-### 编译步骤
-1.  使用 Visual Studio 2022 打开 `Nepgear.sln`。
-2.  选择构建配置为 `Release` / `x86` (大多数 Galgame 为 32 位程序)。
-3.  点击 **生成解决方案 (Build Solution)**。
-4.  编译完成后：
-    *   在 `Release/` 目录下会生成 `Nepgear.dll`。
-    *   在 `Packer/Release/` (或类似路径) 下会生成 `Packer.exe`。
+引擎开关默认全关，需要哪个开哪个，且受 `[Font] Enable` 总开关约束。各引擎实现细节见 `Nepgear/hooks/internal/font/engines/*/README.md`。
 
-## 📦 安装与使用
+## 构建
 
-### 1. 部署文件
-将以下文件复制到游戏根目录（即游戏主 EXE 所在的目录）：
+需要 Visual Studio 2022（v143 工具集）和 Windows SDK。
 
-1.  **Nepgear.dll** -> 重命名为 **`winmm.dll`**。（或直接在VS里设置目标文件名为winmm）
-    *   *原理：游戏启动时会尝试加载系统的 winmm.dll，重命名后游戏会优先加载我们的 DLL，Nepgear 会自动将原有函数调用转发给系统真正的 winmm.dll。*
-2.  **Nepgear.ini** -> 配置文件。
-3.  **galgame_cnjp.ttf** -> 你想要替换的字体文件（文件名需与 ini 中配置一致）。
-
-### 2. 配置文件说明 (Nepgear.ini)
-配置文件需保存为 **UTF-16 LE** 编码。
-
-```ini
-[System]
-; 全局开关，设为 0 将禁用所有功能
-Enable=1
-
-[Font]
-; 是否启用字体Hook (0 = 关闭, 1 = 开启)
-Enable=1
-
-; 字体文件名（必须放在游戏根目录或重定向文件夹内）
-; 若留空则使用系统默认字体
-FileName=galgame.ttf
-
-; 字体名称（CreateFont 中的 FaceName）
-; 建议与 FileName 中的字体内名称保持一致
-FaceName=galgame
-
-; 字体字符集 (128 = Shift-JIS, 134 = GB2312, 1 = Default)
-; 如果汉化后出现乱码尝试改为 134 或 1
-Charset=128
-
-; 是否启用字体名称替换 (0 = 关闭, 1 = 开启)
-; 设为0时不会将字体名替换为 FaceName 指定的字体
-EnableFaceNameReplace=1
-
-; 是否启用字符集替换 (0 = 关闭, 1 = 开启)
-; 设为0时不会修改原始字符集
-EnableCharsetReplace=0
-
-; 是否启用字体高度缩放 (0 = 关闭, 1 = 开启)
-EnableHeightScale=1
-; 字体高度缩放比例 (支持小数，例如 0.9 或 1.2)
-; 用于修正汉化后字体过大或过小的问题
-HeightScale=1.0
-
-; 是否启用字体宽度缩放 (0 = 关闭, 1 = 开启)
-EnableWidthScale=1
-; 字体宽度缩放比例 (支持小数，例如 0.8 或 1.5)
-; 用于调整字体横向宽窄
-WidthScale=1.0
-
-; 是否启用字体粗细调整 (0 = 关闭, 1 = 开启)
-EnableWeight=1
-; 字体粗细 (0 = 默认, 400 = 标准, 700 = 粗体)
-; 注意：设为0表示使用程序原本请求的粗细
-Weight=0
-
-[Window]
-; 是否启用窗口标题修改 (0 = 关闭, 1 = 开启)
-Enable=1
-
-; 自定义窗口标题内容
-Title=我是一只大肥鸭
-
-[FileRedirect]
-; 是否启用文件重定向 (0 = 关闭, 1 = 开启)
-; 开启后，游戏读取文件时会优先从 Folder 指定的文件夹中查找
-Enable=1
-
-; 重定向文件夹名称 (默认为 Nepgear)
-Folder=Nepgear
-
-; 压缩包文件名（如果使用压缩模式）
-ArchiveFile=Nepgear.chs
-
-[FileHook]
-; VFS读取模式
-; 0 ：物理读取模式
-; 1 ：内存读取模式
-VFSMode=0
-
-[LocaleEmulator]
-; 是否启用区域模拟集成 (0 = 关闭, 1 = 开启)
-; 只有设置为 1 时才会将 LoaderDll.dll 和 LocaleEmulator.dll 载入游戏根目录并执行区域
-Enable=1
-
-; 代码页 (932 = 日文 Shift-JIS, 936 = 中文 GBK)
-CodePage=932
-
-; 区域 ID (1041 = 日本, 2052 = 中国)
-LocaleID=1041
-
-; 字符集 ID (128 = Shift-JIS, 134 = GB2312)
-Charset=128
-
-; 时区设置 (Tokyo Standard Time = 东京时区, China Standard Time = 中国标准时间)
-Timezone=Tokyo Standard Time
-
-[Debug]
-; 是否开启调试控制台 (0 = 关闭, 1 = 开启)
-; 开启后会弹出一个 CMD 窗口显示 Hook 时的日志（用于排查文件加载等）
-Enable=0
-; 是否开启Nepgear.log日志 (0 = 关闭, 1 = 开启)
-LogToFile=0
+```bat
+build.bat              两个架构 Release
+build.bat x86          仅 32 位
+build.bat x64          仅 64 位
+build.bat all rebuild  全量重建
+build.bat x86 debug    Debug 配置
 ```
 
-### 3. 使用 Packer 打包资源
-Nepgear 配套了一个简单的打包工具 `Packer.exe`，用于将翻译资源打包成 `.chs` 单个文件。
+`build_x86.bat` / `build_x64.bat` 是单架构的简写入口。也可以直接用 Visual Studio 打开 `Nepgear.sln`，三个工程（Nepgear、Packer、Unpacker）都在里面。
 
-**使用方法：**
-1.  将需要替换的游戏资源（图片、脚本等）放入一个文件夹，保持原有的目录结构。
-2.  将该文件夹直接**拖拽**到 `Packer.exe` 图标上。
-3.  程序会自动在同级目录生成同名的 `.chs` 文件（例如拖拽 `Nepgear` 文件夹 -> 生成 `Nepgear.chs`）。
-4.  将生成的 `.chs` 文件放入游戏目录，并在 `Nepgear.ini` 中配置 `ArchiveFile=xxx.chs`。
+产物：
+
+| 架构 | 输出目录 |
+| --- | --- |
+| x86 | `Release\winmm.dll`、`Packer.exe`、`Unpacker.exe` |
+| x64 | `x64\Release\winmm.dll`、`Packer.exe`、`Unpacker.exe` |
+
+Release 构建有两点和常规工程不同。一是 `winmm.dll` 出来就是 UPX 压缩版（约 39%），压缩内置在 MSBuild 流程里，先压临时副本、`upx -t` 校验通过才覆盖输出，中断不会留下损坏文件。二是不生成 `.pdb` / `.lib` / `.exp`，输出目录只有可执行文件。
+
+需要 PDB 调试时设 `NEPGEAR_SKIP_PACK=1` 再构建，或编 Debug 配置。
+
+UPX 5.1.1 随仓库放在 `tools/upx/`。
+
+## 部署
+
+复制到游戏主 EXE 所在目录：
+
+1. `winmm.dll` — 架构必须与游戏进程一致
+2. `Nepgear.ini` — 配置文件，**必须存为 UTF-16 LE**，缺失会直接弹窗退出
+3. 字体文件 — 文件名与 ini 里的 `FileName` 一致
+
+游戏启动时会加载同目录下的 `winmm.dll`，Nepgear 把原有函数调用转发给系统真正的 `winmm.dll`，所以不影响音频功能。
+
+开启 `[LocaleEmulator] Enable=1` 时还需要把 `LoaderDll_x86/x64.dll` 和 `LocaleEmulatorPlus_x86/x64.dll` 放进重定向文件夹（默认 `Nepgear/`）。这些运行时不随仓库分发。
+
+## 配置
+
+完整带注释的配置见仓库根目录的 `Nepgear.ini`，这里只列关键项。
+
+### `[System]`
+
+```ini
+Enable=1              ; 总开关，0 = 全部功能停用
+ShowStartupPopup=1    ; 启动提示弹窗
+```
+
+### `[Font]`
+
+```ini
+Enable=1
+FileName=galgame.ttf  ; 放在游戏根目录或重定向文件夹，留空用系统字体
+FaceName=galgame      ; CreateFont 的 FaceName，建议与字体内部名一致
+Charset=128           ; 128=Shift-JIS  134=GB2312  1=Default
+
+EnableFaceNameReplace=1
+EnableCharsetReplace=0
+
+EnableHeightScale=1
+HeightScale=1.0       ; 支持小数，修正汉化后字体过大过小
+EnableWidthScale=1
+WidthScale=1.0
+EnableWeight=1
+Weight=0              ; 0=沿用程序请求  400=标准  700=粗体
+```
+
+字距、垂直度量、行距：`EnableCharSpacing` / `CharSpacing`、`EnableVerticalMetrics` / `AscentPermille` / `DescentPermille`、`EnableLineSpacing` / `LineSpacing`。垂直度量按 unitsPerEm 千分比修补 hhea 和 OS/2 表。
+
+字符集伪装与文本替换：
+
+```ini
+EnableCodepageSpoof=0   ; 把游戏请求的 SpoofFromCharset 伪装成 SpoofToCharset
+SpoofFromCharset=128
+SpoofToCharset=1
+
+EnableTextSubstitution=0
+TextSubstitutionMode=0  ; 0=日文旧字体/异体字  1=繁转简  2=简转繁
+TextSubstitutionCodepage=932
+```
+
+### `[FontCompatibility]`
+
+个别引擎对某些 GDI Hook 敏感，这里逐项关闭：`SkipDrawTextA`、`SkipFontDataQueries`、`SelectObjectTrackedOnly`、`HookCreateFontW`、`HookCreateFontIndirectW`、`HookGetTextFace`。字体不生效或渲染异常时优先调这一节。
+
+### `[FontEngines]`
+
+每个引擎一个 `Enable*` 开关加若干细项。例如：
+
+```ini
+EnableBgiHook=0
+BgiPatchGdiImports=1              ; Win32 专用，x64 无效
+BgiClearGlyphCacheOnSwitch=1
+
+EnableArtemis=0
+ArtemisPatchTables=1              ; 改 list_windows*.tbl / IET 文本里的字号、字距、行距
+ArtemisRedirectFontFiles=1
+ArtemisFontSize=0                 ; 0 = 保留游戏原值
+ArtemisRubySize=-1                ; -1 = 保留游戏原值
+```
+
+其余引擎（KiriKiri、EntisGLS、Softpal、Escu:de、Mirai、Majiro、DxLib、TinkerBell、Unity、Tyrano、Ren'Py、YU-RIS）的开关命名同理，逐项注释见 `Nepgear.ini`。
+
+CatSystem2 和 YU-RIS 没有独立总开关：前者在 `Enable=1` 且 `EnableFaceNameReplace=1` 时自动检测，后者随字体替换启用；YU-RIS 另有 `YurisAtlasCodepage` 控制图形集码页（0 = 按资源结构自动判断）。
+
+### `[Window]`
+
+```ini
+Enable=1
+TitleMode=2   ; 0=进程内同步  1=仅 WinEvent 监听  2=混合（推荐）
+Title=自定义标题
+```
+
+### `[FileRedirect]` 与 `[FileHook]`
+
+```ini
+Enable=1
+Folder=Nepgear            ; 优先从这里找文件
+ArchiveFile=Nepgear.chs   ; 封包模式的资源包
+
+VFSMode=0                 ; 0=物理读取  1=内存读取
+```
+
+### `[LocaleEmulator]`
+
+```ini
+Enable=0
+CodePage=932              ; 932=Shift-JIS  936=GBK
+LocaleID=1041             ; 1041=日本  2052=中国
+Charset=128
+Timezone=Tokyo Standard Time
+```
+
+按当前进程位数加载匹配的 `LoaderDll` 与核心 DLL，运行时暂存到系统临时目录，不占用游戏目录。
+
+### `[CodePage]`
+
+```ini
+Enable=0
+FromCodePage=932
+ToCodePage=65001
+```
+
+用于引擎硬编码 CP932 解码 UTF-8 脚本的场合。字符集伪装发生得太晚时（文本在 GDI 之前就已成乱码），改这里。
+
+### `[GLOBAL]`
+
+KiriKiri XP3 补丁与 RioShiina 专用：`EnableKrkrz` / `KrkrzPatchFile`、`EnableRioShiina` / `RioShiinaMode`（1 = 翻译重定向，2 = 解包）等。
+
+### `[Debug]`
+
+```ini
+Enable=0                  ; 弹出 CMD 控制台显示 Hook 日志
+LogToFile=0               ; 输出 Nepgear.log
+EnableFontTrace=0         ; 字体 Hook 细粒度采样
+FontSlowMs=50
+FontTraceSampleLimit=0
+```
+
+字体不生效时先开 `Enable=1` 看日志，能看到实际拦到哪些 API、字体是否加载成功。
+
+## 配套工具
+
+`Packer.exe` 把翻译资源打成单个 `.chs`：保持原目录结构放好文件，把文件夹拖到 `Packer.exe` 上，同级生成同名 `.chs`，再在 ini 里配 `ArchiveFile`。
+
+`Unpacker.exe` 反向解包，用于检查封包内容。
+
+两者都是命令行工具，直接拖拽即可。
+
+## 目录结构
+
+```
+Nepgear/            主 DLL 工程
+  dllmain.cpp       入口与 Hook 安装顺序
+  hooks/            各子系统聚合单元
+    internal/       .cppinc 实现切片（不单独编译）
+      font/engines/ 15 个引擎适配
+  font/             字体表修补（name / cmap / OS/2 / hhea）
+Common/             Packer 与 Unpacker 共用头文件
+Packer/ Unpacker/   资源打包工具
+tools/upx/          随仓库固定的 UPX 5.1.1
+```
+
+代码组织约定见 `Nepgear/hooks/README.md`。`.cppinc` 是实现切片，与所属 `.cpp` 共享私有状态和原始 API 指针，不能单独编译。
