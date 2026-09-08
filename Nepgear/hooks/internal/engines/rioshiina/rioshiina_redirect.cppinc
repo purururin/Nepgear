@@ -1,0 +1,44 @@
+//
+// Resource Redirection
+//
+static void* redirectFile(const char* lpFileName, uint32_t* pBytesRead) {
+    if (!lpFileName) return nullptr;
+    std::wstring fileName = SJIS_to_Wide(lpFileName);
+    size_t lastSlash = fileName.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos) fileName = fileName.substr(lastSlash + 1);
+
+    static std::wstring exeDir = []() {
+        wchar_t path[MAX_PATH]; GetModuleFileNameW(NULL, path, MAX_PATH);
+        std::wstring ws(path); return ws.substr(0, ws.find_last_of(L"\\/"));
+    }();
+
+    fs::path targetPath = fs::path(exeDir) / L"unencrypted" / fileName;
+    if (!fs::exists(targetPath)) targetPath = fs::path(exeDir) / Config::RedirectFolderW / fileName;
+
+    if (fs::exists(targetPath)) {
+        std::ifstream ifs(targetPath, std::ios::binary);
+        if (ifs) {
+            auto fileSize = (SIZE_T)fs::file_size(targetPath);
+            void* pBuffer = GlobalAlloc(GMEM_FIXED, fileSize);
+            if (pBuffer) {
+                ifs.read((char*)pBuffer, fileSize);
+                if (pBytesRead) *pBytesRead = (uint32_t)ifs.gcount();
+                Utils::Log("[RioShiina] Redirected: %s -> %ls", lpFileName, targetPath.c_str());
+                return pBuffer;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void* __cdecl MyRioGetResMode1(const char* lpFileName, uint32_t* pBytesRead) {
+    if (void* pFileData = redirectFile(lpFileName, pBytesRead)) return pFileData;
+    return orgRioGetRes(lpFileName, pBytesRead);
+}
+
+void* __cdecl MyRioReadFile(const char* currentWorkDir, const char* logicFileName, uint32_t* pBytesRead) {
+    if (void* pFileData = redirectFile(logicFileName, pBytesRead)) return pFileData;
+    return orgRioReadFile(currentWorkDir, logicFileName, pBytesRead);
+}
+
+

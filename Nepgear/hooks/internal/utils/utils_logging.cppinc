@@ -1,0 +1,156 @@
+    static void LogInternal(LogLevel level, const wchar_t* message) {
+        std::lock_guard<std::mutex> lock(g_LogMutex);
+
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        wchar_t timeBuf[64];
+        swprintf_s(timeBuf, L"[%02d:%02d:%02d.%03d]", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+        const wchar_t* levelPrefix = L"[INFO ]";
+        WORD consoleAttr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+
+        if (level == LOG_WARN) {
+            levelPrefix = L"[WARN ]";
+            consoleAttr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+        }
+        else if (level == LOG_ERROR) {
+            levelPrefix = L"[ERROR]";
+            consoleAttr = FOREGROUND_RED | FOREGROUND_INTENSITY;
+        }
+
+        std::wstring logLine;
+        logLine.reserve(512);
+        if (level == LOG_ERROR) {
+            logLine += L"============================================================\n";
+        }
+        logLine += timeBuf;
+        logLine += L" ";
+        logLine += levelPrefix;
+        logLine += L" ";
+        logLine += message;
+        logLine += L"\n";
+        if (level == LOG_ERROR) {
+            logLine += L"============================================================\n";
+        }
+
+        OutputDebugStringW(logLine.c_str());
+
+        if (Config::EnableLogToFile || Config::EnableDebug) {
+            char utf8Buf[4096];
+            int utf8Len = WideCharToMultiByte(CP_UTF8, 0, logLine.c_str(), (int)logLine.length(), utf8Buf, sizeof(utf8Buf) - 1, NULL, NULL);
+            if (utf8Len > 0) {
+                utf8Buf[utf8Len] = '\0';
+
+                if (Config::EnableLogToFile) {
+                    if (g_LogFileHandle == INVALID_HANDLE_VALUE) {
+                        wchar_t logPath[MAX_PATH];
+                        GetModuleFileNameW(NULL, logPath, MAX_PATH);
+                        PathRemoveFileSpecW(logPath);
+                        PathAppendW(logPath, L"Nepgear.log");
+                        g_LogFileHandle = CreateFileW(logPath, FILE_APPEND_DATA,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                    }
+                    if (g_LogFileHandle != INVALID_HANDLE_VALUE) {
+                        DWORD bytesWritten;
+                        WriteFile(g_LogFileHandle, utf8Buf, utf8Len, &bytesWritten, NULL);
+                        if (level == LOG_ERROR) FlushFileBuffers(g_LogFileHandle);
+                    }
+                }
+
+                if (Config::EnableDebug) {
+                    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+                    if (hConsole != INVALID_HANDLE_VALUE && hConsole != NULL) {
+                        SetConsoleTextAttribute(hConsole, consoleAttr);
+                        DWORD bw;
+                        WriteConsoleA(hConsole, utf8Buf, utf8Len, &bw, NULL);
+                        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                    }
+                }
+            }
+        }
+    }
+
+    void Trace(const char* format, ...) {
+        if (!Config::EnableDebugLog) return;
+
+        char buffer[3072] = {};
+        va_list args;
+        va_start(args, format);
+        vsnprintf_s(buffer, _countof(buffer), _TRUNCATE, format, args);
+        va_end(args);
+        Log("%s", buffer);
+    }
+
+    void SaveConfig(HMODULE hModule) {
+        wchar_t iniPath[MAX_PATH] = {};
+        if (!GetModuleFileNameW(hModule, iniPath, MAX_PATH)) return;
+        PathRemoveFileSpecW(iniPath);
+        PathAppendW(iniPath, Config::IniFileName);
+        WritePrivateProfileStringW(L"FontEngines", L"DxLibCachedFontName",
+            Config::DxLibCachedFontNameW, iniPath);
+    }
+
+    void Log(const char* format, ...) {
+        char buffer[2048];
+        va_list args;
+        va_start(args, format);
+        int len = vsnprintf_s(buffer, _countof(buffer), _TRUNCATE, format, args);
+        va_end(args);
+        if (len <= 0) return;
+
+        wchar_t wBuf[2048];
+        int wLen = MultiByteToWideChar(CP_ACP, 0, buffer, len, wBuf, _countof(wBuf) - 1);
+        if (wLen > 0) {
+            wBuf[wLen] = L'\0';
+            LogInternal(LOG_INFO, wBuf);
+        }
+    }
+
+    void Log(LogLevel level, const char* format, ...) {
+        char buffer[2048];
+        va_list args;
+        va_start(args, format);
+        int len = vsnprintf_s(buffer, _countof(buffer), _TRUNCATE, format, args);
+        va_end(args);
+        if (len <= 0) return;
+
+        wchar_t wBuf[2048];
+        int wLen = MultiByteToWideChar(CP_ACP, 0, buffer, len, wBuf, _countof(wBuf) - 1);
+        if (wLen > 0) {
+            wBuf[wLen] = L'\0';
+            LogInternal(level, wBuf);
+        }
+    }
+
+    void LogW(const wchar_t* format, ...) {
+        wchar_t buffer[4096];
+        va_list args;
+        va_start(args, format);
+        _vsnwprintf_s(buffer, _countof(buffer), _TRUNCATE, format, args);
+        va_end(args);
+        LogInternal(LOG_INFO, buffer);
+    }
+
+    void LogW(LogLevel level, const wchar_t* format, ...) {
+        wchar_t buffer[4096];
+        va_list args;
+        va_start(args, format);
+        _vsnwprintf_s(buffer, _countof(buffer), _TRUNCATE, format, args);
+        va_end(args);
+        LogInternal(level, buffer);
+    }
+
+    void InitConsole() {
+        if (Config::EnableDebug) {
+            if (AllocConsole()) {
+                FILE* fp;
+                freopen_s(&fp, "CONOUT$", "w", stdout);
+                freopen_s(&fp, "CONOUT$", "w", stderr);
+                freopen_s(&fp, "CONIN$", "r", stdin);
+                SetConsoleTitleW(L"Hook Debug Console");
+                SetConsoleOutputCP(65001);
+                printf("[Console] Debug Console Initialized.\n");
+            }
+        }
+    }

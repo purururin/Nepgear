@@ -1,0 +1,45 @@
+
+struct PatchFileMapping {
+    std::wstring relativePath;
+    std::wstring fileName;
+    std::wstring stagedPath;
+    bool temporaryFile = false;
+};
+
+static std::vector<PatchFileMapping> g_patchFileMappings;
+static std::vector<HMODULE> g_loadedPatchModules;
+static bool g_preservePatchFilesOnCleanup = false;
+static std::mutex g_PatchFileMutex;
+static HANDLE g_LogFileHandle = INVALID_HANDLE_VALUE;
+static std::mutex g_LogMutex;
+static volatile LONG g_ShutdownRequested = 0;
+
+namespace Utils {
+void RequestShutdown() {
+    InterlockedExchange(&g_ShutdownRequested, 1);
+}
+
+bool IsShuttingDown() {
+    return InterlockedCompareExchange(&g_ShutdownRequested, 0, 0) != 0;
+}
+} // namespace Utils
+
+// Build-time switch for the startup author notice. Set to 0 and rebuild to disable it.
+#ifndef NEPGEAR_ENABLE_STARTUP_POPUP
+#define NEPGEAR_ENABLE_STARTUP_POPUP 1
+#endif
+
+static void DebugPrintW(const wchar_t* format, ...) {
+    wchar_t wbuf[2048];
+    va_list args;
+    va_start(args, format);
+    vswprintf_s(wbuf, _countof(wbuf), format, args);
+    va_end(args);
+
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, NULL, 0, NULL, NULL);
+    if (utf8Len > 0) {
+        std::vector<char> utf8Buf(utf8Len);
+        WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, utf8Buf.data(), utf8Len, NULL, NULL);
+        printf("%s", utf8Buf.data());
+    }
+}

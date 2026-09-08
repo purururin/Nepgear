@@ -1,0 +1,104 @@
+// ============================================================================
+// Mode 2: Unpacking Logic
+// ============================================================================
+static void ExtractWarc(const std::wstring& warcPath) {
+    if (fileNamesInArchives.find(warcPath) == fileNamesInArchives.end()) return;
+    
+    const auto& fileList = fileNamesInArchives[warcPath];
+    fs::path outputDir = fs::path(warcPath).parent_path() / (fs::path(warcPath).stem().wstring() + L"__UNPACKED");
+    fs::create_directories(outputDir);
+
+    Utils::Log("[RioShiina] Extracting %zu files from %ls...", fileList.size(), warcPath.c_str());
+
+    for (const auto& fileNameSJIS : fileList) {
+        // Skip invalid filenames if configured
+        if (Config::RioShiinaSkipInvalidFileName) {
+            bool invalid = false;
+            for (char c : fileNameSJIS) { if (c < 0x20 || c > 0x7E) { invalid = true; break; } }
+            if (invalid) continue;
+        }
+
+        uint32_t bytesRead = 0;
+        void* pFileData = orgRioGetRes(fileNameSJIS.c_str(), &bytesRead);
+        if (pFileData) {
+            std::wstring outName = SJIS_to_Wide(fileNameSJIS.c_str());
+            fs::path outPath = outputDir / outName;
+            std::ofstream ofs(outPath, std::ios::binary);
+            if (ofs) {
+                ofs.write((char*)pFileData, bytesRead);
+                ofs.close();
+            }
+            GlobalFree(pFileData);
+        }
+    }
+    Utils::Log("[RioShiina] Extraction finished for %ls", warcPath.c_str());
+}
+
+static void* __cdecl MyRioGetResMode2(const char* lpFileName, uint32_t* pBytesRead) {
+    void* ret = orgRioGetRes(lpFileName, pBytesRead);
+    
+    static bool unpackTriggered = false;
+    if (!unpackTriggered && lpFileName) {
+        std::string name = lpFileName;
+        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+        if (name.find("efclib.scn") != std::string::npos || name.find("start.scn") != std::string::npos) {
+            unpackTriggered = true;
+            Utils::Log("[RioShiina] Engine initialized. Starting auto-unpack...");
+            for (const auto& archive : archivesToExtract) {
+                ExtractWarc(archive);
+            }
+            Utils::Log("[RioShiina] Auto-unpack completed.");
+        }
+    }
+    return ret;
+}
+
+static HANDLE __cdecl MyFindAndOpenFileInWarc(const char* warcName, char* pureFileName, DWORD dwDesiredAccess, void* a4, void* a5, void* a6, char** pPureFileName) {
+    // Scan archives to build index
+    for (const auto& archive : archivesToExtract) {
+        currentArchivePath = archive;
+        std::string sjisPath = Wide_to_SJIS(archive);
+        HANDLE h = orgFindAndOpenFileInWarc(sjisPath.c_str(), pureFileName, dwDesiredAccess, nullptr, nullptr, nullptr, nullptr);
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    }
+    return orgFindAndOpenFileInWarc(warcName, pureFileName, dwDesiredAccess, a4, a5, a6, pPureFileName);
+}
+
+static void MyAfterDecompressCallInner(uint8_t* entryAddr) {
+    if (currentArchivePath.empty() || !entryAddr) return;
+    auto& fileList = fileNamesInArchives[currentArchivePath];
+    if (!fileList.empty()) return;
+
+    if (!entrySizeOpt.has_value()) {
+        std::string firstFile = (char*)entryAddr;
+        entrySizeOpt = (firstFile.length() + 8 >= 0x20) ? 0x38 : 0x28;
+    }
+
+    while (*entryAddr != 0) {
+        fileList.insert(std::string((char*)entryAddr));
+        entryAddr += entrySizeOpt.value();
+    }
+    Utils::Log("[RioShiina] Successfully indexed archive: %ls", currentArchivePath.c_str());
+}
+
+#ifdef _M_IX86
+void __declspec(naked) MyAfterDecompressCall() {
+    __asm {
+        pushad
+        pushfd
+        mov eax, [esp + 0x24] // Get first param from stack
+        push eax
+        call MyAfterDecompressCallInner
+        add esp, 4
+        popfd
+        popad
+        ret
+    }
+}
+#else
+void MyAfterDecompressCall() {
+    // TODO: Implement x64 version if needed
+}
+#endif
+
+

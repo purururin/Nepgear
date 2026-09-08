@@ -1,0 +1,70 @@
+namespace Hooks {
+
+void InstallWindowHook() {
+    if (!Config::IsSystemEnabled || !Config::EnableWindowTitleHook ||
+        Config::CustomTitleW[0] == L'\0') {
+        return;
+    }
+
+    if (Config::WindowTitleMode == 0 || Config::WindowTitleMode == 2) {
+        EnsureWindowMessageHook();
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(&(PVOID&)orgCreateWindowExA, newCreateWindowExA);
+        DetourAttach(&(PVOID&)orgCreateWindowExW, newCreateWindowExW);
+        DetourAttach(&(PVOID&)orgSetWindowTextA, newSetWindowTextA);
+        DetourAttach(&(PVOID&)orgSetWindowTextW, newSetWindowTextW);
+        DetourAttach(&(PVOID&)orgDefWindowProcA, newDefWindowProcA);
+        DetourAttach(&(PVOID&)orgDefWindowProcW, newDefWindowProcW);
+        DetourAttach(&(PVOID&)orgCallWindowProcA, newCallWindowProcA);
+        DetourAttach(&(PVOID&)orgCallWindowProcW, newCallWindowProcW);
+        LONG error = DetourTransactionCommit();
+        g_apiHooksInstalled = error == NO_ERROR;
+        Utils::Log("[Window] Synchronous API/subclass mode %s (error=%ld).",
+            g_apiHooksInstalled ? "installed" : "failed", error);
+    }
+
+    if (Config::WindowTitleMode == 1 || Config::WindowTitleMode == 2) {
+        g_hWinEventHook = SetWinEventHook(
+            EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE,
+            NULL, WinEventProc, GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
+        Utils::Log("[Window] WinEvent fallback %s.",
+            g_hWinEventHook ? "installed" : "failed");
+    }
+
+    EnumWindows([](HWND hWnd, LPARAM) -> BOOL {
+        DWORD processId = 0;
+        GetWindowThreadProcessId(hWnd, &processId);
+        if (processId == GetCurrentProcessId()) {
+            InstallWindowTitleSubclass(hWnd);
+            ForceUnicodeTitle(hWnd);
+        }
+        return TRUE;
+    }, 0);
+}
+
+void UninstallWindowHook() {
+    if (g_apiHooksInstalled) {
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourDetach(&(PVOID&)orgCreateWindowExA, newCreateWindowExA);
+        DetourDetach(&(PVOID&)orgCreateWindowExW, newCreateWindowExW);
+        DetourDetach(&(PVOID&)orgSetWindowTextA, newSetWindowTextA);
+        DetourDetach(&(PVOID&)orgSetWindowTextW, newSetWindowTextW);
+        DetourDetach(&(PVOID&)orgDefWindowProcA, newDefWindowProcA);
+        DetourDetach(&(PVOID&)orgDefWindowProcW, newDefWindowProcW);
+        DetourDetach(&(PVOID&)orgCallWindowProcA, newCallWindowProcA);
+        DetourDetach(&(PVOID&)orgCallWindowProcW, newCallWindowProcW);
+        if (DetourTransactionCommit() == NO_ERROR) {
+            g_apiHooksInstalled = false;
+        }
+    }
+
+    if (g_hWinEventHook) {
+        UnhookWinEvent(g_hWinEventHook);
+        g_hWinEventHook = NULL;
+    }
+    RemoveWindowMessageHook();
+}
+
+} // namespace Hooks

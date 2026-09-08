@@ -1,0 +1,203 @@
+HANDLE WINAPI newCreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
+    HANDLE engineResult = INVALID_HANDLE_VALUE;
+    if (FontEngineBridge::TryCreateFileA(lpFileName, dwDesiredAccess, dwShareMode,
+        lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes,
+        hTemplateFile, &engineResult)) {
+        return engineResult;
+    }
+    if (!Config::EnableFileHook || !VFS::IsActive()) {
+        return orgCreateFileA(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+    }
+    __try {
+        InitPaths();
+        char relPath[MAX_PATH];
+        if (GetRelativePathA(lpFileName, relPath)) {
+            if (VFS::HasVirtualFileA(relPath)) {
+                HANDLE vHandle = VFS::OpenVirtualFileA(relPath, dwDesiredAccess,
+                    dwShareMode, dwCreationDisposition, dwFlagsAndAttributes,
+                    lpSecurityAttributes, hTemplateFile);
+                if (vHandle != INVALID_HANDLE_VALUE) {
+                    if (Config::EnableDebug) Utils::Log("[VFS-FileA] %s -> handle %p", lpFileName, vHandle);
+                    return vHandle;
+                }
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS-FileA] Exception in hook for: %s", lpFileName ? lpFileName : "(null)");
+    }
+    return orgCreateFileA(lpFileName, dwDesiredAccess, dwShareMode,
+        lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes,
+        hTemplateFile);
+}
+
+HANDLE WINAPI newCreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
+    HANDLE engineResult = INVALID_HANDLE_VALUE;
+    if (FontEngineBridge::TryCreateFileW(lpFileName, dwDesiredAccess, dwShareMode,
+        lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes,
+        hTemplateFile, &engineResult)) {
+        return engineResult;
+    }
+    if (!Config::EnableFileHook || !VFS::IsActive()) {
+        return orgCreateFileW(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+    }
+    __try {
+        InitPaths();
+        wchar_t relPath[MAX_PATH];
+        if (GetRelativePathW(lpFileName, relPath)) {
+            if (VFS::HasVirtualFile(relPath)) {
+                HANDLE vHandle = VFS::OpenVirtualFile(relPath, dwDesiredAccess,
+                    dwShareMode, dwCreationDisposition, dwFlagsAndAttributes,
+                    lpSecurityAttributes, hTemplateFile);
+                if (vHandle != INVALID_HANDLE_VALUE) {
+                    if (Config::EnableDebug) Utils::Log("[VFS-FileW] %S -> handle %p", lpFileName, vHandle);
+                    return vHandle;
+                }
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS-FileW] Exception in hook for: %S", lpFileName ? lpFileName : L"(null)");
+    }
+    return orgCreateFileW(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+}
+
+BOOL WINAPI newReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead, LPDWORD lpNumberOfBytesRead, LPOVERLAPPED lpOverlapped) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::ReadVirtualFile(
+                hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newReadFile for handle %p", hFile);
+    }
+    return orgReadFile(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
+}
+
+DWORD WINAPI newSetFilePointer(HANDLE hFile, LONG lDistanceToMove, PLONG lpDistanceToMoveHigh, DWORD dwMoveMethod) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::SetVirtualFilePointer(
+                hFile, lDistanceToMove, lpDistanceToMoveHigh, dwMoveMethod);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newSetFilePointer for handle %p", hFile);
+    }
+    return orgSetFilePointer(hFile, lDistanceToMove, lpDistanceToMoveHigh, dwMoveMethod);
+}
+
+BOOL WINAPI newSetFilePointerEx(HANDLE hFile, LARGE_INTEGER liDistanceToMove, PLARGE_INTEGER lpNewFilePointer, DWORD dwMoveMethod) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::SetVirtualFilePointerEx(hFile, liDistanceToMove, lpNewFilePointer, dwMoveMethod);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newSetFilePointerEx for handle %p", hFile);
+    }
+    return orgSetFilePointerEx(hFile, liDistanceToMove, lpNewFilePointer, dwMoveMethod);
+}
+
+DWORD WINAPI newGetFileSize(HANDLE hFile, LPDWORD lpFileSizeHigh) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::GetVirtualFileSize(hFile, lpFileSizeHigh);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newGetFileSize for handle %p", hFile);
+    }
+    return orgGetFileSize(hFile, lpFileSizeHigh);
+}
+
+BOOL WINAPI newGetFileSizeEx(HANDLE hFile, PLARGE_INTEGER lpFileSize) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::GetVirtualFileSizeEx(hFile, lpFileSize);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newGetFileSizeEx for handle %p", hFile);
+    }
+    return orgGetFileSizeEx(hFile, lpFileSize);
+}
+
+BOOL WINAPI newGetFileTime(HANDLE hFile, LPFILETIME lpCreationTime,
+    LPFILETIME lpLastAccessTime, LPFILETIME lpLastWriteTime) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::GetVirtualFileTime(
+                hFile, lpCreationTime, lpLastAccessTime, lpLastWriteTime);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newGetFileTime for handle %p", hFile);
+    }
+    return orgGetFileTime(hFile, lpCreationTime, lpLastAccessTime, lpLastWriteTime);
+}
+
+BOOL WINAPI newSetEndOfFile(HANDLE hFile) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::SetVirtualFileEnd(hFile);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newSetEndOfFile for handle %p", hFile);
+    }
+    return orgSetEndOfFile(hFile);
+}
+
+BOOL WINAPI newWriteFile(HANDLE hFile, LPCVOID lpBuffer, DWORD nNumberOfBytesToWrite,
+    LPDWORD lpNumberOfBytesWritten, LPOVERLAPPED lpOverlapped) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = 0;
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newWriteFile for handle %p", hFile);
+    }
+    return orgWriteFile(hFile, lpBuffer, nNumberOfBytesToWrite,
+        lpNumberOfBytesWritten, lpOverlapped);
+}
+
+BOOL WINAPI newCloseHandle(HANDLE hObject) {
+    __try {
+        if (IsVirtualHandleRange(hObject) && VFS::IsVirtualHandle(hObject)) {
+            return VFS::CloseVirtualHandle(hObject);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newCloseHandle for handle %p", hObject);
+    }
+    return orgCloseHandle(hObject);
+}
+
+BOOL WINAPI newGetFileInformationByHandle(HANDLE hFile, LPBY_HANDLE_FILE_INFORMATION lpFileInformation) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::GetVirtualFileInformationByHandle(hFile, lpFileInformation);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newGetFileInformationByHandle for handle %p", hFile);
+    }
+    return orgGetFileInformationByHandle(hFile, lpFileInformation);
+}
+
+DWORD WINAPI newGetFileType(HANDLE hFile) {
+    __try {
+        if (IsVirtualHandleRange(hFile) && VFS::IsVirtualHandle(hFile)) {
+            return VFS::GetVirtualFileType(hFile);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Utils::Log("[VFS] Exception in newGetFileType for handle %p", hFile);
+    }
+    return orgGetFileType(hFile);
+}

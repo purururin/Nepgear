@@ -1,0 +1,132 @@
+namespace {
+
+constexpr int kMaxArchiveEntries = 2000000;
+constexpr int kMaxArchivePathBytes = (MAX_PATH - 1) * 4;
+
+static bool ArchiveFormatError() {
+    SetLastError(ERROR_BAD_FORMAT);
+    return false;
+}
+
+static bool CanReadArchiveBytes(LONGLONG cursor, LONGLONG byteCount, LONGLONG archiveSize) {
+    return cursor >= 0 && byteCount >= 0 && cursor <= archiveSize && byteCount <= archiveSize - cursor;
+}
+
+static bool ReadArchiveBytes(HANDLE archive, void* buffer, DWORD byteCount) {
+    BYTE* output = static_cast<BYTE*>(buffer);
+    DWORD totalRead = 0;
+    while (totalRead < byteCount) {
+        DWORD bytesRead = 0;
+        if (!g_RawReadFile(archive, output + totalRead, byteCount - totalRead, &bytesRead, nullptr)
+            || bytesRead == 0) {
+            return false;
+        }
+        totalRead += bytesRead;
+    }
+    return true;
+}
+
+static bool ReadArchiveIndex(HANDLE archive, std::vector<VFS::VirtualFileEntry>& entries) {
+    LARGE_INTEGER archiveSize = {};
+    if (!GetFileSizeEx(archive, &archiveSize) || archiveSize.QuadPart < static_cast<LONGLONG>(sizeof(int))) {
+        return ArchiveFormatError();
+    }
+
+    LARGE_INTEGER beginning = {};
+    if (!g_RawSetFilePointerEx(archive, beginning, nullptr, FILE_BEGIN)) return false;
+
+    int count = 0;
+    if (!ReadArchiveBytes(archive, &count, sizeof(count))
+        || count < 0 || count > kMaxArchiveEntries) {
+        return ArchiveFormatError();
+    }
+
+    LONGLONG cursor = sizeof(count);
+    entries.clear();
+    entries.reserve(static_cast<size_t>(count < 4096 ? count : 4096));
+
+    for (int i = 0; i < count; ++i) {
+        int pathLength = 0;
+        if (!CanReadArchiveBytes(cursor, sizeof(pathLength), archiveSize.QuadPart)
+            || !ReadArchiveBytes(archive, &pathLength, sizeof(pathLength))) {
+            return ArchiveFormatError();
+        }
+        cursor += sizeof(pathLength);
+        if (pathLength <= 0 || pathLength > kMaxArchivePathBytes
+            || !CanReadArchiveBytes(cursor, pathLength, archiveSize.QuadPart)) {
+            return ArchiveFormatError();
+        }
+
+        std::vector<char> encodedPath(static_cast<size_t>(pathLength) + 1, '\0');
+        if (!ReadArchiveBytes(archive, encodedPath.data(), static_cast<DWORD>(pathLength))) {
+            return ArchiveFormatError();
+        }
+        cursor += pathLength;
+
+        wchar_t path[MAX_PATH] = {};
+        int pathChars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+            encodedPath.data(), pathLength, path, MAX_PATH - 1);
+        if (pathChars <= 0) return ArchiveFormatError();
+        path[pathChars] = L'\0';
+        if (!ArchivePath::IsSafeRelative(path)) return ArchiveFormatError();
+
+        int decompressedSize = 0;
+        int storedSize = 0;
+        constexpr LONGLONG sizeFieldBytes = sizeof(decompressedSize) + sizeof(storedSize);
+        if (!CanReadArchiveBytes(cursor, sizeFieldBytes, archiveSize.QuadPart)
+            || !ReadArchiveBytes(archive, &decompressedSize, sizeof(decompressedSize))
+            || !ReadArchiveBytes(archive, &storedSize, sizeof(storedSize))) {
+            return ArchiveFormatError();
+        }
+        cursor += sizeFieldBytes;
+        if (decompressedSize < 0 || storedSize < 0 || storedSize > decompressedSize
+            || !CanReadArchiveBytes(cursor, storedSize, archiveSize.QuadPart)) {
+            return ArchiveFormatError();
+        }
+
+        VFS::VirtualFileEntry entry = {};
+        entry.relativePath = path;
+        entry.offset = cursor;
+        entry.size = static_cast<DWORD>(storedSize);
+        entry.decompressedSize = static_cast<DWORD>(decompressedSize);
+        entry.isLooseFile = false;
+        entries.push_back(std::move(entry));
+
+        LARGE_INTEGER skip = {};
+        skip.QuadPart = storedSize;
+        if (!g_RawSetFilePointerEx(archive, skip, nullptr, FILE_CURRENT)) return false;
+        cursor += storedSize;
+    }
+
+    return true;
+}
+
+static ULONGLONG ComputeArchiveCacheKey(HANDLE archive, const wchar_t* archivePath) {
+    constexpr ULONGLONG offsetBasis = 1469598103934665603ull;
+    constexpr ULONGLONG prime = 1099511628211ull;
+    ULONGLONG hash = offsetBasis;
+
+    if (archivePath) {
+        for (const wchar_t* p = archivePath; *p; ++p) {
+            wchar_t ch = (*p >= L'A' && *p <= L'Z') ? *p + (L'a' - L'A') : *p;
+            hash = (hash ^ static_cast<ULONGLONG>(ch)) * prime;
+        }
+    }
+
+    BY_HANDLE_FILE_INFORMATION info = {};
+    if (GetFileInformationByHandle(archive, &info)) {
+        const DWORD values[] = {
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+            info.nFileSizeHigh,
+            info.nFileSizeLow,
+            info.ftLastWriteTime.dwHighDateTime,
+            info.ftLastWriteTime.dwLowDateTime,
+        };
+        for (DWORD value : values) hash = (hash ^ value) * prime;
+    }
+    return hash;
+}
+
+} // namespace

@@ -10,6 +10,7 @@ public:
     static LocaleEmulator& getInstance();
     bool initialize();
     bool performLocaleEmulation();
+    bool isBootstrappedByNepgear() const;
     bool isLocaleEmulationEnabled() const { return m_enabled; }
 
 private:
@@ -20,6 +21,8 @@ private:
 
     bool needsLocaleEmulation() const;
     bool relaunchProcess();
+
+    static constexpr const wchar_t* kBootstrapEnvVar = L"NEPGEAR_LE_BOOTSTRAPPED";
 
     bool m_enabled = false;
     bool m_initialized = false;

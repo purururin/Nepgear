@@ -1,0 +1,492 @@
+    namespace {
+        struct CaseInsensitivePathLess {
+            bool operator()(const std::wstring& left, const std::wstring& right) const {
+                return _wcsicmp(left.c_str(), right.c_str()) < 0;
+            }
+        };
+
+        static std::wstring JoinPatchPath(const std::wstring& left, const std::wstring& right) {
+            if (left.empty()) return right;
+            if (right.empty()) return left;
+            if (left.back() == L'\\' || left.back() == L'/') return left + right;
+            return left + L"\\" + right;
+        }
+
+        static std::wstring NormalizePatchLookupPath(const wchar_t* path) {
+            if (!path || !*path) return std::wstring();
+
+            std::wstring normalized(path);
+            std::replace(normalized.begin(), normalized.end(), L'/', L'\\');
+            while (normalized.size() >= 2 && normalized[0] == L'.' && normalized[1] == L'\\') {
+                normalized.erase(0, 2);
+            }
+            for (wchar_t& ch : normalized) {
+                if (ch >= L'A' && ch <= L'Z') ch += L'a' - L'A';
+            }
+            return normalized;
+        }
+
+        static bool IsReservedPatchPath(const std::wstring& relativePath) {
+            const std::wstring normalized = NormalizePatchLookupPath(relativePath.c_str());
+            static const std::wstring reserved = L".module-cache";
+            return normalized == reserved
+                || (normalized.size() > reserved.size()
+                    && normalized.compare(0, reserved.size(), reserved) == 0
+                    && normalized[reserved.size()] == L'\\');
+        }
+
+        static bool IsPatchArtifact(const wchar_t* fileName) {
+            if (fileName && (_wcsicmp(fileName, L"LEPProc_x86.exe") == 0
+                || _wcsicmp(fileName, L"LEPProc_x64.exe") == 0)) {
+                return true;
+            }
+            const wchar_t* ext = fileName ? PathFindExtensionW(fileName) : nullptr;
+            if (!ext || !*ext) return false;
+
+            static const wchar_t* const extensions[] = {
+                L".dll", L".asi", L".ini", L".cfg", L".conf", L".json", L".xml",
+                L".config", L".manifest", L".toml", L".yaml", L".yml",
+                L".ttf", L".ttc", L".otf"
+            };
+            for (const wchar_t* candidate : extensions) {
+                if (_wcsicmp(ext, candidate) == 0) return true;
+            }
+            return false;
+        }
+
+        static bool IsLoadableModule(const wchar_t* fileName) {
+            const wchar_t* ext = fileName ? PathFindExtensionW(fileName) : nullptr;
+            return ext && (_wcsicmp(ext, L".dll") == 0 || _wcsicmp(ext, L".asi") == 0);
+        }
+
+        static bool RequiresExactTempName(const wchar_t* fileName) {
+            if (fileName && _wcsicmp(fileName, L"hook.ini") == 0) {
+                return true;
+            }
+            const wchar_t* ext = fileName ? PathFindExtensionW(fileName) : nullptr;
+            return ext && (_wcsicmp(ext, L".dll") == 0
+                || _wcsicmp(ext, L".asi") == 0
+                || _wcsicmp(ext, L".manifest") == 0
+                || _wcsicmp(ext, L".config") == 0);
+        }
+
+        static bool ShouldStagePatchArtifact(const wchar_t* fileName) {
+            // The legacy Locale Emulator pair is intentionally ignored. LEP
+            // uses architecture-specific native modules so x86 and x64 can
+            // coexist in the same Nepgear folder.
+            if (_wcsicmp(fileName, L"LoaderDll.dll") == 0
+                || _wcsicmp(fileName, L"LocaleEmulator.dll") == 0
+                || _wcsicmp(fileName, L"LEPCommonLibrary.dll") == 0
+                || _wcsicmp(fileName, L"LEPConfig.xml") == 0
+                || _wcsicmp(fileName, L"LEPVersion.xml") == 0
+                || _wcsicmp(fileName, L"LEPProc_x86.exe") == 0
+                || _wcsicmp(fileName, L"LEPProc_x64.exe") == 0) {
+                return false;
+            }
+            if (_wcsicmp(fileName, L"LoaderDll_x86.dll") == 0
+                || _wcsicmp(fileName, L"LocaleEmulatorPlus_x86.dll") == 0
+                || _wcsicmp(fileName, L"LoaderDll_x64.dll") == 0
+                || _wcsicmp(fileName, L"LocaleEmulatorPlus_x64.dll") == 0) {
+                return Config::EnableLE;
+            }
+            return true;
+        }
+
+        static void AddPatchArtifact(
+            std::map<std::wstring, std::wstring, CaseInsensitivePathLess>& artifacts,
+            const std::wstring& relativePath) {
+            if (IsReservedPatchPath(relativePath)) return;
+
+            const wchar_t* fileName = PathFindFileNameW(relativePath.c_str());
+            if (!fileName || !*fileName || !IsPatchArtifact(fileName)
+                || !ShouldStagePatchArtifact(fileName)) {
+                return;
+            }
+
+            auto existing = artifacts.find(fileName);
+            if (existing == artifacts.end()) {
+                artifacts.emplace(fileName, relativePath);
+                return;
+            }
+
+            const bool existingIsNested = wcschr(existing->second.c_str(), L'\\') != nullptr
+                || wcschr(existing->second.c_str(), L'/') != nullptr;
+            const bool candidateIsRoot = wcschr(relativePath.c_str(), L'\\') == nullptr
+                && wcschr(relativePath.c_str(), L'/') == nullptr;
+            if (existingIsNested && candidateIsRoot) existing->second = relativePath;
+        }
+
+        static bool GetPatchFileInfo(const std::wstring& path, WIN32_FILE_ATTRIBUTE_DATA& info) {
+            ZeroMemory(&info, sizeof(info));
+            return GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &info) != FALSE
+                && !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+        }
+
+        static ULONGLONG PatchFileSize(const WIN32_FILE_ATTRIBUTE_DATA& info) {
+            return (static_cast<ULONGLONG>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+        }
+
+        static bool PatchFilesEqual(const std::wstring& left, const std::wstring& right) {
+            WIN32_FILE_ATTRIBUTE_DATA leftInfo = {};
+            WIN32_FILE_ATTRIBUTE_DATA rightInfo = {};
+            if (!GetPatchFileInfo(left, leftInfo) || !GetPatchFileInfo(right, rightInfo)
+                || PatchFileSize(leftInfo) != PatchFileSize(rightInfo)) {
+                return false;
+            }
+
+            HANDLE leftFile = CreateFileW(left.c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+            if (leftFile == INVALID_HANDLE_VALUE) return false;
+            HANDLE rightFile = CreateFileW(right.c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+            if (rightFile == INVALID_HANDLE_VALUE) {
+                CloseHandle(leftFile);
+                return false;
+            }
+
+            std::vector<BYTE> leftBuffer(64 * 1024);
+            std::vector<BYTE> rightBuffer(64 * 1024);
+            bool equal = true;
+            for (;;) {
+                DWORD leftRead = 0;
+                DWORD rightRead = 0;
+                if (!ReadFile(leftFile, leftBuffer.data(), static_cast<DWORD>(leftBuffer.size()),
+                        &leftRead, nullptr)
+                    || !ReadFile(rightFile, rightBuffer.data(), static_cast<DWORD>(rightBuffer.size()),
+                        &rightRead, nullptr)
+                    || leftRead != rightRead
+                    || (leftRead != 0 && memcmp(leftBuffer.data(), rightBuffer.data(), leftRead) != 0)) {
+                    equal = false;
+                    break;
+                }
+                if (leftRead == 0) break;
+            }
+
+            CloseHandle(rightFile);
+            CloseHandle(leftFile);
+            return equal;
+        }
+
+        static void HashPatchValue(ULONGLONG& hash, ULONGLONG value) {
+            constexpr ULONGLONG prime = 1099511628211ull;
+            for (size_t i = 0; i < sizeof(value); ++i) {
+                hash = (hash ^ static_cast<BYTE>(value & 0xFF)) * prime;
+                value >>= 8;
+            }
+        }
+
+        static void HashPatchText(ULONGLONG& hash, const std::wstring& text) {
+            constexpr ULONGLONG prime = 1099511628211ull;
+            for (wchar_t ch : text) {
+                if (ch >= L'A' && ch <= L'Z') ch += L'a' - L'A';
+                hash = (hash ^ static_cast<ULONGLONG>(ch)) * prime;
+            }
+        }
+
+        static void HashPatchFileMetadata(ULONGLONG& hash, const std::wstring& path) {
+            WIN32_FILE_ATTRIBUTE_DATA info = {};
+            if (!GetPatchFileInfo(path, info)) return;
+            HashPatchValue(hash, PatchFileSize(info));
+            HashPatchValue(hash,
+                (static_cast<ULONGLONG>(info.ftLastWriteTime.dwHighDateTime) << 32)
+                | info.ftLastWriteTime.dwLowDateTime);
+        }
+
+        static std::wstring FindConfiguredArchive(const std::wstring& moduleDirectory,
+            const std::wstring& patchDirectory) {
+            std::wstring archivePath = JoinPatchPath(moduleDirectory, Config::ArchiveFileName);
+            if (PathFileExistsW(archivePath.c_str())) return archivePath;
+            archivePath = JoinPatchPath(patchDirectory, Config::ArchiveFileName);
+            return PathFileExistsW(archivePath.c_str()) ? archivePath : std::wstring();
+        }
+
+        static ULONGLONG ComputePatchSetKey(
+            const std::wstring& moduleDirectory,
+            const std::wstring& patchDirectory,
+            const std::map<std::wstring, std::wstring, CaseInsensitivePathLess>& artifacts) {
+            ULONGLONG hash = 1469598103934665603ull;
+#ifdef _WIN64
+            HashPatchText(hash, L"x64");
+#else
+            HashPatchText(hash, L"x86");
+#endif
+            const std::wstring archivePath = FindConfiguredArchive(moduleDirectory, patchDirectory);
+            HashPatchText(hash, archivePath);
+            HashPatchFileMetadata(hash, archivePath);
+
+            for (const auto& artifact : artifacts) {
+                HashPatchText(hash, artifact.second);
+                const std::wstring loosePath = JoinPatchPath(patchDirectory, artifact.second);
+                WIN32_FILE_ATTRIBUTE_DATA looseInfo = {};
+                if (GetPatchFileInfo(loosePath, looseInfo)) {
+                    HashPatchValue(hash, PatchFileSize(looseInfo));
+                    HashPatchValue(hash,
+                        (static_cast<ULONGLONG>(looseInfo.ftLastWriteTime.dwHighDateTime) << 32)
+                        | looseInfo.ftLastWriteTime.dwLowDateTime);
+                } else {
+                    ULONGLONG virtualSize = 0;
+                    if (VFS::TryGetVirtualFileSize(artifact.second.c_str(), &virtualSize)) {
+                        HashPatchValue(hash, virtualSize);
+                    }
+                }
+            }
+            return hash;
+        }
+
+        static std::wstring MakePatchTemporaryPath(const std::wstring& destination) {
+            static volatile LONG sequence = 0;
+            wchar_t suffix[80] = {};
+            swprintf_s(suffix, L".nepgear.%08lX.%08lX.%08lX.tmp",
+                GetCurrentProcessId(), GetCurrentThreadId(), InterlockedIncrement(&sequence));
+            return destination + suffix;
+        }
+
+        static bool InstallPatchCandidate(const std::wstring& candidate,
+            const std::wstring& destination) {
+            if (PatchFilesEqual(candidate, destination)) {
+                DeleteFileW(candidate.c_str());
+                return true;
+            }
+            if (MoveFileExW(candidate.c_str(), destination.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                return true;
+            }
+            DeleteFileW(candidate.c_str());
+            return false;
+        }
+
+        static bool StageVirtualPatchArtifact(const std::wstring& relativePath,
+            const std::wstring& destination) {
+            ULONGLONG expectedSize = 0;
+            WIN32_FILE_ATTRIBUTE_DATA destinationInfo = {};
+            if (VFS::TryGetVirtualFileSize(relativePath.c_str(), &expectedSize)
+                && GetPatchFileInfo(destination, destinationInfo)
+                && PatchFileSize(destinationInfo) == expectedSize) {
+                return true;
+            }
+
+            const std::wstring candidate = MakePatchTemporaryPath(destination);
+            DeleteFileW(candidate.c_str());
+            if (!VFS::ExtractFile(relativePath.c_str(), candidate.c_str())) return false;
+            return InstallPatchCandidate(candidate, destination);
+        }
+
+        static std::wstring MakeFlatPatchPath(const std::wstring& tempDirectory,
+            ULONGLONG patchSetKey, const std::wstring& fileName) {
+            if (RequiresExactTempName(fileName.c_str())) return JoinPatchPath(tempDirectory, fileName);
+
+            wchar_t prefix[48] = {};
+            swprintf_s(prefix, L"nepgear_%016I64X_", patchSetKey);
+            return JoinPatchPath(tempDirectory, std::wstring(prefix) + fileName);
+        }
+
+        static const PatchFileMapping* FindPatchFileMapping(const wchar_t* requestedPath) {
+            if (!requestedPath || !*requestedPath) return nullptr;
+
+            const std::wstring normalized = NormalizePatchLookupPath(requestedPath);
+            const wchar_t* requestedFileName = PathFindFileNameW(normalized.c_str());
+            for (const auto& mapping : g_patchFileMappings) {
+                if (_wcsicmp(mapping.relativePath.c_str(), normalized.c_str()) == 0) return &mapping;
+            }
+            for (const auto& mapping : g_patchFileMappings) {
+                if (_wcsicmp(mapping.fileName.c_str(), requestedFileName) == 0) return &mapping;
+            }
+            return nullptr;
+        }
+
+        static bool IsDifferentModuleAlreadyLoaded(const PatchFileMapping& mapping) {
+            if (!IsLoadableModule(mapping.fileName.c_str())) return false;
+            HMODULE loaded = GetModuleHandleW(mapping.fileName.c_str());
+            if (!loaded) return false;
+
+            wchar_t loadedPath[MAX_PATH] = {};
+            if (!GetModuleFileNameW(loaded, loadedPath, _countof(loadedPath))) return true;
+            return _wcsicmp(loadedPath, mapping.stagedPath.c_str()) != 0;
+        }
+    }
+
+    BOOL DeployPatchFiles(HMODULE hModule) {
+        wchar_t modulePath[MAX_PATH] = {};
+        if (!GetModuleFileNameW(hModule, modulePath, _countof(modulePath))) return FALSE;
+        PathRemoveFileSpecW(modulePath);
+
+        const std::wstring moduleDirectory(modulePath);
+        const std::wstring patchDirectory = JoinPatchPath(moduleDirectory, Config::RedirectFolderW);
+        std::map<std::wstring, std::wstring, CaseInsensitivePathLess> artifacts;
+
+        if (VFS::IsActive()) {
+            std::vector<std::wstring> virtualFiles;
+            VFS::GetVirtualFileList(virtualFiles);
+            for (const std::wstring& relativePath : virtualFiles) AddPatchArtifact(artifacts, relativePath);
+        }
+
+        if (PathIsDirectoryW(patchDirectory.c_str())) {
+            const std::wstring searchPath = JoinPatchPath(patchDirectory, L"*");
+            WIN32_FIND_DATAW findData = {};
+            HANDLE find = FindFirstFileW(searchPath.c_str(), &findData);
+            if (find != INVALID_HANDLE_VALUE) {
+                do {
+                    if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                        AddPatchArtifact(artifacts, findData.cFileName);
+                    }
+                } while (FindNextFileW(find, &findData));
+                FindClose(find);
+            }
+        }
+
+        if (artifacts.empty()) {
+            std::lock_guard<std::mutex> lock(g_PatchFileMutex);
+            g_patchFileMappings.clear();
+            return TRUE;
+        }
+
+        wchar_t tempDirectory[MAX_PATH] = {};
+        const DWORD tempLength = GetTempPathW(_countof(tempDirectory), tempDirectory);
+        if (tempLength == 0 || tempLength >= _countof(tempDirectory)) {
+            Log(LOG_ERROR, "[PatchFiles] Cannot resolve the system temporary directory (error %lu)", GetLastError());
+            return FALSE;
+        }
+
+        const ULONGLONG patchSetKey = ComputePatchSetKey(moduleDirectory, patchDirectory, artifacts);
+        BOOL success = TRUE;
+        std::vector<PatchFileMapping> mappings;
+        mappings.reserve(artifacts.size());
+        for (const auto& artifact : artifacts) {
+            if (IsLoadableModule(artifact.first.c_str()) && GetModuleHandleW(artifact.first.c_str())) {
+                if (Config::EnableDebug) {
+                    Log("[PatchFiles] Skipping already loaded module: %S", artifact.first.c_str());
+                }
+                continue;
+            }
+
+            const std::wstring loosePath = JoinPatchPath(patchDirectory, artifact.second);
+            WIN32_FILE_ATTRIBUTE_DATA looseInfo = {};
+
+            PatchFileMapping mapping;
+            mapping.relativePath = NormalizePatchLookupPath(artifact.second.c_str());
+            mapping.fileName = NormalizePatchLookupPath(artifact.first.c_str());
+            if (GetPatchFileInfo(loosePath, looseInfo)) {
+                mapping.stagedPath = loosePath;
+            } else {
+                mapping.stagedPath = MakeFlatPatchPath(tempDirectory, patchSetKey, artifact.first);
+                mapping.temporaryFile = true;
+                if (!StageVirtualPatchArtifact(artifact.second, mapping.stagedPath)) {
+                    success = FALSE;
+                    Log(LOG_ERROR, "[PatchFiles] Failed to materialize %S (error %lu)",
+                        artifact.second.c_str(), GetLastError());
+                    continue;
+                }
+            }
+
+            mappings.push_back(std::move(mapping));
+            if (Config::EnableDebug) {
+                const PatchFileMapping& stored = mappings.back();
+                Log("[PatchFiles] %S -> %S", artifact.second.c_str(), stored.stagedPath.c_str());
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_PatchFileMutex);
+            g_patchFileMappings.swap(mappings);
+        }
+        return success;
+    }
+
+    BOOL LoadPackagedRuntimeModules() {
+        static const wchar_t* const moduleNames[] = { L"SBRioshiina.dll" };
+        BOOL success = TRUE;
+        for (const wchar_t* moduleName : moduleNames) {
+            if (GetModuleHandleW(moduleName)) continue;
+
+            wchar_t modulePath[MAX_PATH] = {};
+            if (!ResolvePatchFilePathW(moduleName, modulePath, _countof(modulePath))) continue;
+
+            wchar_t originalDirectory[MAX_PATH] = {};
+            const DWORD originalDirectoryLength = GetCurrentDirectoryW(
+                _countof(originalDirectory), originalDirectory);
+            wchar_t moduleDirectory[MAX_PATH] = {};
+            wcscpy_s(moduleDirectory, modulePath);
+            PathRemoveFileSpecW(moduleDirectory);
+            const bool changedDirectory = originalDirectoryLength > 0
+                && originalDirectoryLength < _countof(originalDirectory)
+                && SetCurrentDirectoryW(moduleDirectory) != FALSE;
+            HMODULE module = LoadLibraryExW(modulePath, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (changedDirectory) SetCurrentDirectoryW(originalDirectory);
+            if (!module) {
+                success = FALSE;
+                Log(LOG_ERROR, "[PatchFiles] Failed to load %S from %S (error %lu)",
+                    moduleName, modulePath, GetLastError());
+                continue;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(g_PatchFileMutex);
+                g_loadedPatchModules.push_back(module);
+            }
+            Log("[PatchFiles] Loaded packaged runtime module: %S", moduleName);
+        }
+        return success;
+    }
+
+    bool IsPackagedRuntimeModuleLoaded(LPCWSTR moduleName) {
+        return moduleName && *moduleName && GetModuleHandleW(moduleName) != nullptr;
+    }
+
+    bool ResolvePatchFilePathW(LPCWSTR requestedPath, LPWSTR resolvedPath, size_t resolvedPathCount) {
+        if (!requestedPath || !resolvedPath || resolvedPathCount == 0) return false;
+
+        std::lock_guard<std::mutex> lock(g_PatchFileMutex);
+        const PatchFileMapping* mapping = FindPatchFileMapping(requestedPath);
+        if (!mapping || IsDifferentModuleAlreadyLoaded(*mapping)
+            || !PathFileExistsW(mapping->stagedPath.c_str())
+            || mapping->stagedPath.size() + 1 > resolvedPathCount) {
+            return false;
+        }
+        wcscpy_s(resolvedPath, resolvedPathCount, mapping->stagedPath.c_str());
+        return true;
+    }
+
+    bool ResolvePatchFilePathFromAnsi(LPCSTR requestedPath, LPWSTR resolvedPath, size_t resolvedPathCount) {
+        if (!requestedPath || !resolvedPath || resolvedPathCount == 0) return false;
+        wchar_t widePath[MAX_PATH] = {};
+        if (!MultiByteToWideChar(CP_ACP, 0, requestedPath, -1, widePath, _countof(widePath))) return false;
+        return ResolvePatchFilePathW(widePath, resolvedPath, resolvedPathCount);
+    }
+
+    bool ResolvePatchFilePathA(LPCSTR requestedPath, LPSTR resolvedPath, size_t resolvedPathCount) {
+        if (!requestedPath || !resolvedPath || resolvedPathCount == 0) return false;
+        wchar_t widePath[MAX_PATH] = {};
+        if (!ResolvePatchFilePathFromAnsi(requestedPath, widePath, _countof(widePath))) return false;
+        const int required = WideCharToMultiByte(CP_ACP, 0, widePath, -1, nullptr, 0, nullptr, nullptr);
+        if (required <= 0 || static_cast<size_t>(required) > resolvedPathCount) return false;
+        return WideCharToMultiByte(CP_ACP, 0, widePath, -1, resolvedPath,
+            static_cast<int>(resolvedPathCount), nullptr, nullptr) != 0;
+    }
+
+    void PreservePatchFilesForRelaunch() {
+        std::lock_guard<std::mutex> lock(g_PatchFileMutex);
+        g_preservePatchFilesOnCleanup = true;
+    }
+
+    void CleanupPatchFiles() {
+        std::vector<std::wstring> temporaryFiles;
+        {
+            std::lock_guard<std::mutex> lock(g_PatchFileMutex);
+            if (!g_preservePatchFilesOnCleanup) {
+                for (const PatchFileMapping& mapping : g_patchFileMappings) {
+                    if (mapping.temporaryFile) temporaryFiles.push_back(mapping.stagedPath);
+                }
+            }
+            g_patchFileMappings.clear();
+            g_loadedPatchModules.clear();
+        }
+
+        for (const std::wstring& path : temporaryFiles) DeleteFileW(path.c_str());
+
+        if (g_LogFileHandle != INVALID_HANDLE_VALUE) {
+            CloseHandle(g_LogFileHandle);
+            g_LogFileHandle = INVALID_HANDLE_VALUE;
+        }
+    }

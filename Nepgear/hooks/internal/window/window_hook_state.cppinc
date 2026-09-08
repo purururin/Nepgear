@@ -1,0 +1,26 @@
+typedef HWND(WINAPI* pCreateWindowExA)(DWORD, LPCSTR, LPCSTR, DWORD,
+    int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
+typedef HWND(WINAPI* pCreateWindowExW)(DWORD, LPCWSTR, LPCWSTR, DWORD,
+    int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
+typedef BOOL(WINAPI* pSetWindowTextA)(HWND, LPCSTR);
+typedef BOOL(WINAPI* pSetWindowTextW)(HWND, LPCWSTR);
+typedef LRESULT(WINAPI* pDefWindowProcA)(HWND, UINT, WPARAM, LPARAM);
+typedef LRESULT(WINAPI* pDefWindowProcW)(HWND, UINT, WPARAM, LPARAM);
+typedef LRESULT(WINAPI* pCallWindowProcA)(WNDPROC, HWND, UINT, WPARAM, LPARAM);
+typedef LRESULT(WINAPI* pCallWindowProcW)(WNDPROC, HWND, UINT, WPARAM, LPARAM);
+
+static pCreateWindowExA orgCreateWindowExA = CreateWindowExA;
+static pCreateWindowExW orgCreateWindowExW = CreateWindowExW;
+static pSetWindowTextA orgSetWindowTextA = SetWindowTextA;
+static pSetWindowTextW orgSetWindowTextW = SetWindowTextW;
+static pDefWindowProcA orgDefWindowProcA = DefWindowProcA;
+static pDefWindowProcW orgDefWindowProcW = DefWindowProcW;
+static pCallWindowProcA orgCallWindowProcA = CallWindowProcA;
+static pCallWindowProcW orgCallWindowProcW = CallWindowProcW;
+
+static HWINEVENTHOOK g_hWinEventHook = NULL;
+static bool g_apiHooksInstalled = false;
+static __declspec(thread) bool g_applyingWindowTitle = false;
+static __declspec(thread) HHOOK g_callWndRetHook = NULL;
+
+static const UINT_PTR kWindowTitleSubclassId = 0x4E505754;

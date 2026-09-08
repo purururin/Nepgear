@@ -1,0 +1,345 @@
+    bool HasVirtualFile(const wchar_t* p) {
+        if (!g_IsActive || !p) return false;
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        return g_FileIndex.find(NormalizePath(p)) != g_FileIndex.end();
+    }
+
+    bool HasVirtualFileA(const char* p) {
+        if (!g_IsActive || !p) return false;
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        return g_FileIndex.find(NormalizePathA(p)) != g_FileIndex.end();
+    }
+
+    bool HasVirtualDirectory(const wchar_t* p) {
+        if (!g_IsActive || !p) return false;
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        return g_DirectoryIndex.find(NormalizePath(p)) != g_DirectoryIndex.end();
+    }
+
+    bool HasVirtualDirectoryA(const char* p) {
+        if (!g_IsActive || !p) return false;
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        return g_DirectoryIndex.find(NormalizePathA(p)) != g_DirectoryIndex.end();
+    }
+
+    bool TryGetVirtualFileSize(const wchar_t* p, ULONGLONG* size) {
+        if (!g_IsActive || !p) return false;
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_FileIndex.find(NormalizePath(p));
+        if (it == g_FileIndex.end()) return false;
+        if (size) *size = it->second.decompressedSize;
+        return true;
+    }
+
+    bool TryGetVirtualFileSizeA(const char* p, ULONGLONG* size) {
+        if (!g_IsActive || !p) return false;
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_FileIndex.find(NormalizePathA(p));
+        if (it == g_FileIndex.end()) return false;
+        if (size) *size = it->second.decompressedSize;
+        return true;
+    }
+
+    static bool BuildPhysicalCachePath(
+        const VirtualFileEntry& entry, wchar_t* cachePath, size_t cachePathCount) {
+        if (!cachePath || cachePathCount < MAX_PATH || g_HybridCacheDir[0] == L'\0') {
+            return false;
+        }
+
+        wchar_t archiveKey[32] = {};
+        swprintf_s(archiveKey, L"%016llX", g_ArchiveCacheKey);
+
+        wcscpy_s(cachePath, cachePathCount, g_HybridCacheDir);
+        if (!PathAppendW(cachePath, L"NepgearVFS")
+            || !PathAppendW(cachePath, archiveKey)
+            || !PathAppendW(cachePath, entry.relativePath.c_str())) {
+            return false;
+        }
+
+        wchar_t parentPath[MAX_PATH] = {};
+        wcscpy_s(parentPath, cachePath);
+        if (!PathRemoveFileSpecW(parentPath)) return false;
+        const int createResult = SHCreateDirectoryExW(nullptr, parentPath, nullptr);
+        return createResult == ERROR_SUCCESS
+            || createResult == ERROR_ALREADY_EXISTS
+            || createResult == ERROR_FILE_EXISTS;
+    }
+
+    static bool PhysicalCacheFileMatches(
+        const wchar_t* cachePath, DWORD expectedSize) {
+        WIN32_FILE_ATTRIBUTE_DATA data = {};
+        if (!GetFileAttributesExW(cachePath, GetFileExInfoStandard, &data)
+            || (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            return false;
+        }
+        const ULONGLONG actualSize =
+            (static_cast<ULONGLONG>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+        return actualSize == expectedSize;
+    }
+
+    static bool RequiresRealFileHandle(
+        DWORD desiredAccess, DWORD creationDisposition, DWORD flagsAndAttributes) {
+        constexpr DWORD writeAccess = GENERIC_WRITE | FILE_WRITE_DATA
+            | FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA | DELETE;
+        constexpr DWORD kernelOnlyFlags = FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING
+            | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_BACKUP_SEMANTICS;
+        return (desiredAccess & writeAccess) != 0
+            || creationDisposition != OPEN_EXISTING
+            || (flagsAndAttributes & kernelOnlyFlags) != 0;
+    }
+
+    static std::shared_ptr<const std::vector<BYTE>> GetDecompressedData(
+        VirtualFileEntry& entry) {
+        if (entry.decompressedData) return entry.decompressedData;
+        if (g_ArchiveHandle == INVALID_HANDLE_VALUE
+            || entry.size >= entry.decompressedSize) {
+            return {};
+        }
+
+        LARGE_INTEGER offset = {};
+        offset.QuadPart = entry.offset;
+        if (!g_RawSetFilePointerEx(g_ArchiveHandle, offset, nullptr, FILE_BEGIN)) {
+            return {};
+        }
+
+        std::vector<BYTE> compressed(entry.size);
+        if (entry.size > 0
+            && !ReadArchiveBytes(g_ArchiveHandle, compressed.data(), entry.size)) {
+            return {};
+        }
+
+        auto decompressed = std::make_shared<std::vector<BYTE>>(entry.decompressedSize);
+        if (!DecompressData(compressed, entry.decompressedSize, decompressed->data())) {
+            return {};
+        }
+        entry.decompressedData = decompressed;
+        return entry.decompressedData;
+    }
+
+    HANDLE OpenVirtualFile(const wchar_t* relativePath, DWORD desiredAccess,
+        DWORD shareMode, DWORD creationDisposition, DWORD flagsAndAttributes,
+        LPSECURITY_ATTRIBUTES securityAttributes, HANDLE templateFile) {
+        if (!g_IsActive || !relativePath) return INVALID_HANDLE_VALUE;
+        std::wstring norm = NormalizePath(relativePath);
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_FileIndex.find(norm);
+        if (it == g_FileIndex.end()) return INVALID_HANDLE_VALUE;
+
+        const wchar_t* ext = PathFindExtensionW(relativePath);
+        const bool executableFile = ext && (_wcsicmp(ext, L".dll") == 0
+            || _wcsicmp(ext, L".exe") == 0 || _wcsicmp(ext, L".asi") == 0);
+        const bool needsRealHandle = Config::VFSMode == 0 || executableFile
+            || RequiresRealFileHandle(desiredAccess, creationDisposition, flagsAndAttributes);
+
+        if (needsRealHandle && it->second.isLooseFile) {
+            return g_RawCreateFileW(it->second.looseFilePath.c_str(), desiredAccess,
+                shareMode, securityAttributes, creationDisposition, flagsAndAttributes, templateFile);
+        }
+
+        // Real-handle fallback materializes the original relative path. This keeps
+        // normal memory reads in RAM while preserving full Win32 handle semantics.
+        if (needsRealHandle && !it->second.isLooseFile && g_HybridCacheDir[0] != L'\0') {
+            wchar_t cachePath[MAX_PATH] = {};
+            if (BuildPhysicalCachePath(it->second, cachePath, _countof(cachePath))) {
+                if (!PhysicalCacheFileMatches(cachePath, it->second.decompressedSize)
+                    && !ExtractFile(relativePath, cachePath)) {
+                    return INVALID_HANDLE_VALUE;
+                }
+                HANDLE realHandle = g_RawCreateFileW(cachePath, desiredAccess,
+                    shareMode, securityAttributes, creationDisposition, flagsAndAttributes, templateFile);
+                if (realHandle != INVALID_HANDLE_VALUE) return realHandle;
+            }
+        }
+
+        // Fallback or Legacy mode emulated handle
+        auto vfh = std::make_unique<VirtualFileHandle>();
+        vfh->entry = &it->second; 
+        vfh->position = 0; 
+        vfh->isLooseFile = it->second.isLooseFile;
+        vfh->archiveHandle = g_ArchiveHandle;
+        vfh->looseFileHandle = INVALID_HANDLE_VALUE;
+
+        if (vfh->isLooseFile) {
+            vfh->looseFileHandle = g_RawCreateFileW(it->second.looseFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (vfh->looseFileHandle == INVALID_HANDLE_VALUE) {
+                return INVALID_HANDLE_VALUE;
+            }
+        } else if (it->second.size < it->second.decompressedSize) {
+            vfh->decompressedData = GetDecompressedData(it->second);
+            if (!vfh->decompressedData) return INVALID_HANDLE_VALUE;
+        }
+
+        HANDLE hFake = (HANDLE)(++g_VirtualHandleCounter);
+        g_HandleMap[hFake] = std::move(vfh);
+        return hFake;
+    }
+
+    HANDLE OpenVirtualFileA(const char* p, DWORD desiredAccess, DWORD shareMode,
+        DWORD creationDisposition, DWORD flagsAndAttributes,
+        LPSECURITY_ATTRIBUTES securityAttributes, HANDLE templateFile) {
+        if (!p) return INVALID_HANDLE_VALUE;
+        wchar_t w[MAX_PATH] = {};
+        if (!MultiByteToWideChar(Config::LE_Codepage, 0, p, -1, w, MAX_PATH)) {
+            return INVALID_HANDLE_VALUE;
+        }
+        return OpenVirtualFile(w, desiredAccess, shareMode,
+            creationDisposition, flagsAndAttributes, securityAttributes, templateFile);
+    }
+
+    bool IsVirtualHandle(HANDLE h) {
+        if (!g_IsActive) return false;
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        return g_HandleMap.find(h) != g_HandleMap.end();
+    }
+
+    BOOL ReadVirtualFile(HANDLE h, LPVOID b, DWORD n, LPDWORD r, LPOVERLAPPED o) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_HandleMap.find(h);
+        if (it == g_HandleMap.end() || (n != 0 && !b)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        VirtualFileHandle* vfh = it->second.get();
+        const LONGLONG readPosition = o
+            ? static_cast<LONGLONG>((static_cast<ULONGLONG>(o->OffsetHigh) << 32) | o->Offset)
+            : vfh->position;
+        LONGLONG rem = vfh->entry->decompressedSize - readPosition;
+        if (rem <= 0) { if (r) *r = 0; return TRUE; }
+        DWORD toRead = (DWORD)min((LONGLONG)n, rem); DWORD br = 0;
+
+        if (vfh->decompressedData) {
+            memcpy(b, vfh->decompressedData->data() + readPosition, toRead); br = toRead;
+        } else {
+            HANDLE hSrc = vfh->isLooseFile ? vfh->looseFileHandle : vfh->archiveHandle;
+            LARGE_INTEGER s; s.QuadPart = (vfh->isLooseFile ? 0 : vfh->entry->offset) + readPosition;
+            if (!g_RawSetFilePointerEx(hSrc, s, NULL, FILE_BEGIN)
+                || !g_RawReadFile(hSrc, b, toRead, &br, NULL)) {
+                if (r) *r = 0;
+                return FALSE;
+            }
+        }
+        if (!o) vfh->position += br;
+        else {
+            o->Internal = 0;
+            o->InternalHigh = br;
+            if (o->hEvent) SetEvent(o->hEvent);
+        }
+        if (r) *r = br;
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+
+    DWORD SetVirtualFilePointer(HANDLE h, LONG d, PLONG dh, DWORD m) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_HandleMap.find(h); if (it == g_HandleMap.end()) return INVALID_SET_FILE_POINTER;
+        VirtualFileHandle* vfh = it->second.get();
+        LONGLONG dist = d; if (dh) dist |= ((LONGLONG)*dh) << 32;
+        LONGLONG nPos = 0;
+        if (m == FILE_BEGIN) nPos = dist;
+        else if (m == FILE_CURRENT) nPos = vfh->position + dist;
+        else if (m == FILE_END) nPos = vfh->entry->decompressedSize + dist;
+        else { SetLastError(ERROR_INVALID_PARAMETER); return INVALID_SET_FILE_POINTER; }
+        if (nPos < 0) { SetLastError(ERROR_NEGATIVE_SEEK); return INVALID_SET_FILE_POINTER; }
+        vfh->position = nPos;
+        if (dh) *dh = (LONG)(nPos >> 32);
+        SetLastError(ERROR_SUCCESS);
+        return (DWORD)(nPos & 0xFFFFFFFF);
+    }
+
+    BOOL SetVirtualFilePointerEx(HANDLE h, LARGE_INTEGER d, PLARGE_INTEGER np, DWORD m) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_HandleMap.find(h); if (it == g_HandleMap.end()) return FALSE;
+        VirtualFileHandle* vfh = it->second.get();
+        LONGLONG nPos = 0;
+        if (m == FILE_BEGIN) nPos = d.QuadPart;
+        else if (m == FILE_CURRENT) nPos = vfh->position + d.QuadPart;
+        else if (m == FILE_END) nPos = vfh->entry->decompressedSize + d.QuadPart;
+        else { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+        if (nPos < 0) { SetLastError(ERROR_NEGATIVE_SEEK); return FALSE; }
+        vfh->position = nPos; if (np) np->QuadPart = nPos;
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+
+    DWORD GetVirtualFileSize(HANDLE h, LPDWORD hs) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_HandleMap.find(h); if (it == g_HandleMap.end()) {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return INVALID_FILE_SIZE;
+        }
+        if (hs) *hs = (DWORD)((ULONGLONG)it->second->entry->decompressedSize >> 32);
+        SetLastError(ERROR_SUCCESS);
+        return (DWORD)(it->second->entry->decompressedSize & 0xFFFFFFFF);
+    }
+
+    BOOL GetVirtualFileSizeEx(HANDLE h, PLARGE_INTEGER s) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_HandleMap.find(h); if (it == g_HandleMap.end() || !s) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        if (s) s->QuadPart = it->second->entry->decompressedSize;
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+
+    BOOL CloseVirtualHandle(HANDLE h) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_HandleMap.find(h); if (it == g_HandleMap.end()) {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+        VirtualFileHandle* vfh = it->second.get();
+        if (vfh->isLooseFile && vfh->looseFileHandle != INVALID_HANDLE_VALUE) {
+            if (g_RawCloseHandle) g_RawCloseHandle(vfh->looseFileHandle);
+        }
+        // std::unique_ptr will handle memory deletion and vector cleanup
+        g_HandleMap.erase(it);
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+
+    BOOL GetVirtualFileInformationByHandle(HANDLE h, LPBY_HANDLE_FILE_INFORMATION i) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_HandleMap.find(h); if (it == g_HandleMap.end() || !i) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        ZeroMemory(i, sizeof(BY_HANDLE_FILE_INFORMATION));
+        i->dwFileAttributes = FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY;
+        i->ftCreationTime = it->second->entry->creationTime;
+        i->ftLastAccessTime = it->second->entry->lastAccessTime;
+        i->ftLastWriteTime = it->second->entry->lastWriteTime;
+        i->nFileSizeLow = (DWORD)(it->second->entry->decompressedSize & 0xFFFFFFFF);
+        i->nFileSizeHigh = (DWORD)((ULONGLONG)it->second->entry->decompressedSize >> 32);
+        i->nNumberOfLinks = 1;
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+
+    BOOL GetVirtualFileTime(HANDLE h, LPFILETIME creationTime,
+        LPFILETIME lastAccessTime, LPFILETIME lastWriteTime) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_HandleMap.find(h);
+        if (it == g_HandleMap.end()) {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+        if (creationTime) *creationTime = it->second->entry->creationTime;
+        if (lastAccessTime) *lastAccessTime = it->second->entry->lastAccessTime;
+        if (lastWriteTime) *lastWriteTime = it->second->entry->lastWriteTime;
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+
+    BOOL SetVirtualFileEnd(HANDLE h) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        if (g_HandleMap.find(h) == g_HandleMap.end()) {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
+    DWORD GetVirtualFileType(HANDLE h) { return IsVirtualHandle(h) ? FILE_TYPE_DISK : FILE_TYPE_UNKNOWN; }

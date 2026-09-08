@@ -1,0 +1,317 @@
+// Host adapter for the SimpleFontHook engine dispatcher.
+//
+// The dispatcher and all engine decisions are kept verbatim from
+// SimpleFontHook. Nepgear owns the process-wide Win32 detours and the VFS, so
+// these adapters only report an engine result; an unhandled request is passed
+// back to the VFS/physical-file path by file_hook_io.cppinc.
+
+static bool EngineFileHooksRequired() {
+    return Config::EnableFontHook ||
+        Config::EnableBgiHook ||
+        Config::EnableArtemisHook ||
+        Config::EnableKrkrHook ||
+        Config::EnableEntisHook ||
+        Config::EnableSoftpalHook ||
+        Config::EnableEscudeHook ||
+        Config::EnableMiraiHook ||
+        Config::EnableMajiroHook ||
+        Config::EnableDxLibHook ||
+        Config::EnableTinkerBellHook ||
+        Config::EnableCatSystemUnityHook ||
+        Config::EnableTyranoHook ||
+        Config::EnableRenPyHook;
+}
+
+static bool ShouldBypassEngineFileHooks() {
+    return g_inEngineFileHook || EngineCommon::IsInternalFileQuery();
+}
+
+static void SetEngineOriginalFileFunctions(
+    void* createFileA, void* createFileW,
+    void* getFileAttributesA, void* getFileAttributesW,
+    void* getFileAttributesExA, void* getFileAttributesExW,
+    void* findFirstFileA, void* findFirstFileW,
+    void* findFirstFileExA, void* findFirstFileExW) {
+    orgCreateFileA = (pCreateFileA)createFileA;
+    orgCreateFileW = (pCreateFileW)createFileW;
+    orgGetFileAttributesA = (pGetFileAttributesA)getFileAttributesA;
+    orgGetFileAttributesW = (pGetFileAttributesW)getFileAttributesW;
+    orgGetFileAttributesExA = (pGetFileAttributesExA)getFileAttributesExA;
+    orgGetFileAttributesExW = (pGetFileAttributesExW)getFileAttributesExW;
+    orgFindFirstFileA = (pFindFirstFileA)findFirstFileA;
+    orgFindFirstFileW = (pFindFirstFileW)findFirstFileW;
+    orgFindFirstFileExA = (pFindFirstFileExA)findFirstFileExA;
+    orgFindFirstFileExW = (pFindFirstFileExW)findFirstFileExW;
+}
+
+static bool TryEngineCreateFileW(LPCWSTR fileName, DWORD desiredAccess,
+    DWORD shareMode, LPSECURITY_ATTRIBUTES securityAttributes,
+    DWORD creationDisposition, DWORD flagsAndAttributes, HANDLE templateFile,
+    HANDLE* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks()) {
+        *result = orgCreateFileW(fileName, desiredAccess, shareMode,
+            securityAttributes, creationDisposition, flagsAndAttributes,
+            templateFile);
+        return true;
+    }
+
+    EngineFileHookGuard guard;
+    const bool readOnly = EngineCommon::IsReadOnlyOpen(desiredAccess,
+        creationDisposition);
+    if (EngineShouldHideFileW(fileName, readOnly, false)) {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        *result = INVALID_HANDLE_VALUE;
+        return true;
+    }
+    return EngineTryOpenFileW(fileName, desiredAccess, shareMode,
+        securityAttributes, creationDisposition, flagsAndAttributes,
+        templateFile, result);
+}
+
+static bool TryEngineCreateFileA(LPCSTR fileName, DWORD desiredAccess,
+    DWORD shareMode, LPSECURITY_ATTRIBUTES securityAttributes,
+    DWORD creationDisposition, DWORD flagsAndAttributes, HANDLE templateFile,
+    HANDLE* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks()) {
+        *result = orgCreateFileA(fileName, desiredAccess, shareMode,
+            securityAttributes, creationDisposition, flagsAndAttributes,
+            templateFile);
+        return true;
+    }
+
+    std::wstring wide = EngineCommon::WideFromAnsi(fileName);
+    if (wide.empty()) return false;
+    return TryEngineCreateFileW(wide.c_str(), desiredAccess, shareMode,
+        securityAttributes, creationDisposition, flagsAndAttributes,
+        templateFile, result);
+}
+
+static bool TryEngineGetFileAttributesW(LPCWSTR fileName, DWORD* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks()) {
+        *result = orgGetFileAttributesW(fileName);
+        return true;
+    }
+
+    EngineFileHookGuard guard;
+    if (EngineShouldHideFileW(fileName, true, false)) {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        *result = INVALID_FILE_ATTRIBUTES;
+        return true;
+    }
+
+    EngineFileAttributeStatus status = EngineQueryFileAttributesW(fileName,
+        false, NULL, result);
+    return status != EngineFileAttributeStatus::Unhandled;
+}
+
+static bool TryEngineGetFileAttributesA(LPCSTR fileName, DWORD* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks()) {
+        *result = orgGetFileAttributesA(fileName);
+        return true;
+    }
+    std::wstring wide = EngineCommon::WideFromAnsi(fileName);
+    return !wide.empty() && TryEngineGetFileAttributesW(wide.c_str(), result);
+}
+
+static bool TryEngineGetFileAttributesExW(LPCWSTR fileName,
+    GET_FILEEX_INFO_LEVELS infoLevel, LPVOID fileInformation, BOOL* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks() || infoLevel != GetFileExInfoStandard) {
+        *result = orgGetFileAttributesExW(fileName, infoLevel, fileInformation);
+        return true;
+    }
+
+    EngineFileHookGuard guard;
+    if (EngineShouldHideFileW(fileName, true, false)) {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        *result = FALSE;
+        return true;
+    }
+
+    WIN32_FILE_ATTRIBUTE_DATA data = {};
+    EngineFileAttributeStatus status = EngineQueryFileAttributesW(fileName,
+        true, &data, NULL);
+    if (status == EngineFileAttributeStatus::Unhandled) return false;
+    if (status == EngineFileAttributeStatus::Missing) {
+        *result = FALSE;
+        return true;
+    }
+    if (fileInformation)
+        *static_cast<WIN32_FILE_ATTRIBUTE_DATA*>(fileInformation) = data;
+    *result = TRUE;
+    return true;
+}
+
+static bool TryEngineGetFileAttributesExA(LPCSTR fileName,
+    GET_FILEEX_INFO_LEVELS infoLevel, LPVOID fileInformation, BOOL* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks() || infoLevel != GetFileExInfoStandard) {
+        *result = orgGetFileAttributesExA(fileName, infoLevel, fileInformation);
+        return true;
+    }
+    std::wstring wide = EngineCommon::WideFromAnsi(fileName);
+    return !wide.empty() && TryEngineGetFileAttributesExW(wide.c_str(),
+        infoLevel, fileInformation, result);
+}
+
+static bool TryEngineFindFirstFileW(LPCWSTR fileName,
+    LPWIN32_FIND_DATAW findData, HANDLE* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks()) {
+        *result = orgFindFirstFileW(fileName, findData);
+        return true;
+    }
+
+    EngineFileHookGuard guard;
+    if (!EngineShouldHideFileW(fileName, true, true)) return false;
+    SetLastError(ERROR_FILE_NOT_FOUND);
+    *result = INVALID_HANDLE_VALUE;
+    return true;
+}
+
+static bool TryEngineFindFirstFileA(LPCSTR fileName,
+    LPWIN32_FIND_DATAA findData, HANDLE* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks()) {
+        *result = orgFindFirstFileA(fileName, findData);
+        return true;
+    }
+    std::wstring wide = EngineCommon::WideFromAnsi(fileName);
+    if (wide.empty()) return false;
+
+    EngineFileHookGuard guard;
+    if (!EngineShouldHideFileW(wide.c_str(), true, true)) return false;
+    SetLastError(ERROR_FILE_NOT_FOUND);
+    *result = INVALID_HANDLE_VALUE;
+    return true;
+}
+
+static bool EngineConvertFindDataWToA(const WIN32_FIND_DATAW& source,
+    WIN32_FIND_DATAA* result) {
+    if (!result) return false;
+
+    WIN32_FIND_DATAA converted = {};
+    converted.dwFileAttributes = source.dwFileAttributes;
+    converted.ftCreationTime = source.ftCreationTime;
+    converted.ftLastAccessTime = source.ftLastAccessTime;
+    converted.ftLastWriteTime = source.ftLastWriteTime;
+    converted.nFileSizeHigh = source.nFileSizeHigh;
+    converted.nFileSizeLow = source.nFileSizeLow;
+    converted.dwReserved0 = source.dwReserved0;
+    converted.dwReserved1 = source.dwReserved1;
+    if (orgWideCharToMultiByte(CP_ACP, 0, source.cFileName, -1,
+        converted.cFileName, _countof(converted.cFileName), NULL, NULL) <= 0) {
+        return false;
+    }
+    if (source.cAlternateFileName[0] &&
+        orgWideCharToMultiByte(CP_ACP, 0, source.cAlternateFileName, -1,
+            converted.cAlternateFileName,
+            _countof(converted.cAlternateFileName), NULL, NULL) <= 0) {
+        return false;
+    }
+    *result = converted;
+    return true;
+}
+
+static bool TryEngineFindFirstFileFallbackW(LPCWSTR fileName,
+    LPWIN32_FIND_DATAW findData, HANDLE* result) {
+    if (!result || !findData || !EngineFileHooksRequired() ||
+        g_inEngineFileHook || EngineCommon::IsInternalFileQuery()) {
+        return false;
+    }
+
+    EngineFileHookGuard guard;
+    return EngineTryFindFirstFileFallbackW(fileName, findData, result);
+}
+
+static bool TryEngineFindFirstFileFallbackA(LPCSTR fileName,
+    LPWIN32_FIND_DATAA findData, HANDLE* result) {
+    if (!result || !findData || !EngineFileHooksRequired() ||
+        g_inEngineFileHook || EngineCommon::IsInternalFileQuery()) {
+        return false;
+    }
+
+    std::wstring wide = EngineCommon::WideFromAnsi(fileName);
+    if (wide.empty()) return false;
+
+    WIN32_FIND_DATAW wideData = {};
+    HANDLE fallback = INVALID_HANDLE_VALUE;
+    {
+        EngineFileHookGuard guard;
+        if (!EngineTryFindFirstFileFallbackW(wide.c_str(), &wideData,
+            &fallback)) {
+            return false;
+        }
+    }
+    if (!EngineConvertFindDataWToA(wideData, findData)) {
+        DWORD error = GetLastError();
+        FindClose(fallback);
+        SetLastError(error ? error : ERROR_NO_UNICODE_TRANSLATION);
+        *result = INVALID_HANDLE_VALUE;
+        return true;
+    }
+    *result = fallback;
+    return true;
+}
+
+static bool TryEngineFindFirstFileExW(LPCWSTR fileName,
+    FINDEX_INFO_LEVELS infoLevel, LPVOID findData,
+    FINDEX_SEARCH_OPS searchOp, LPVOID searchFilter, DWORD additionalFlags,
+    HANDLE* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks()) {
+        *result = orgFindFirstFileExW(fileName, infoLevel, findData, searchOp,
+            searchFilter, additionalFlags);
+        return true;
+    }
+    if ((infoLevel != FindExInfoStandard && infoLevel != FindExInfoBasic) ||
+        searchOp != FindExSearchNameMatch || !findData) {
+        return false;
+    }
+    return TryEngineFindFirstFileW(fileName,
+        static_cast<LPWIN32_FIND_DATAW>(findData), result);
+}
+
+static bool TryEngineFindFirstFileExA(LPCSTR fileName,
+    FINDEX_INFO_LEVELS infoLevel, LPVOID findData,
+    FINDEX_SEARCH_OPS searchOp, LPVOID searchFilter, DWORD additionalFlags,
+    HANDLE* result) {
+    if (!result || !EngineFileHooksRequired()) return false;
+    if (ShouldBypassEngineFileHooks()) {
+        *result = orgFindFirstFileExA(fileName, infoLevel, findData, searchOp,
+            searchFilter, additionalFlags);
+        return true;
+    }
+    if ((infoLevel != FindExInfoStandard && infoLevel != FindExInfoBasic) ||
+        searchOp != FindExSearchNameMatch || !findData) {
+        return false;
+    }
+    return TryEngineFindFirstFileA(fileName,
+        static_cast<LPWIN32_FIND_DATAA>(findData), result);
+}
+
+static bool TryEngineFindFirstFileExFallbackW(LPCWSTR fileName,
+    FINDEX_INFO_LEVELS infoLevel, LPVOID findData,
+    FINDEX_SEARCH_OPS searchOp, HANDLE* result) {
+    if ((infoLevel != FindExInfoStandard && infoLevel != FindExInfoBasic) ||
+        searchOp != FindExSearchNameMatch || !findData) {
+        return false;
+    }
+    return TryEngineFindFirstFileFallbackW(fileName,
+        static_cast<LPWIN32_FIND_DATAW>(findData), result);
+}
+
+static bool TryEngineFindFirstFileExFallbackA(LPCSTR fileName,
+    FINDEX_INFO_LEVELS infoLevel, LPVOID findData,
+    FINDEX_SEARCH_OPS searchOp, HANDLE* result) {
+    if ((infoLevel != FindExInfoStandard && infoLevel != FindExInfoBasic) ||
+        searchOp != FindExSearchNameMatch || !findData) {
+        return false;
+    }
+    return TryEngineFindFirstFileFallbackA(fileName,
+        static_cast<LPWIN32_FIND_DATAA>(findData), result);
+}

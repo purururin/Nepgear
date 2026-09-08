@@ -1,5 +1,5 @@
 ﻿#include <windows.h>
-#include <compressapi.h>
+#include "../Common/compression_api.h"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -7,11 +7,10 @@
 #include <chrono>
 #include <iomanip>
 
-#pragma comment(lib, "cabinet.lib")
-
 namespace fs = std::filesystem;
 
-COMPRESSOR_HANDLE g_compressor = NULL;
+CompressionApi::LzmsCompressor g_compressor;
+bool g_compressorConfigured = false;
 
 void SetColor(int colorCode) {
     SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), colorCode);
@@ -34,19 +33,20 @@ std::string WideToUtf8(const std::wstring& wstr) {
 }
 
 bool CompressData(const std::vector<char>& input, std::vector<char>& output) {
-    if (g_compressor == NULL) {
-        if (!CreateCompressor(COMPRESS_ALGORITHM_LZMS, NULL, &g_compressor)) return false;
+    if (!g_compressorConfigured) {
+        if (!g_compressor.IsSupported()) return false;
         DWORD blockSize = 1024 * 1024;
-        SetCompressorInformation(g_compressor, COMPRESS_INFORMATION_CLASS_BLOCK_SIZE, &blockSize, sizeof(blockSize));
+        if (!g_compressor.SetBlockSize(blockSize)) return false;
+        g_compressorConfigured = true;
     }
 
-    SIZE_T compressedSize = 0;
-    if (!Compress(g_compressor, input.data(), input.size(), NULL, 0, &compressedSize)) {
+    size_t compressedSize = 0;
+    if (!g_compressor.Compress(input.data(), input.size(), nullptr, 0, &compressedSize)) {
         if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) return false;
     }
 
     output.resize(compressedSize);
-    if (!Compress(g_compressor, input.data(), input.size(), output.data(), compressedSize, &compressedSize)) {
+    if (!g_compressor.Compress(input.data(), input.size(), output.data(), output.size(), &compressedSize)) {
         return false;
     }
     output.resize(compressedSize);
@@ -86,7 +86,14 @@ bool PackDirectory(const fs::path& rootPath, const fs::path& outputPath) {
     }
 
     std::vector<fs::path> filePaths;
-    for (const auto& entry : fs::recursive_directory_iterator(rootPath)) {
+    fs::recursive_directory_iterator iterator(rootPath);
+    const fs::recursive_directory_iterator end;
+    for (; iterator != end; ++iterator) {
+        const auto& entry = *iterator;
+        if (entry.is_directory() && _wcsicmp(entry.path().filename().c_str(), L".module-cache") == 0) {
+            iterator.disable_recursion_pending();
+            continue;
+        }
         if (entry.is_regular_file()) filePaths.push_back(entry.path());
     }
 
@@ -203,6 +210,7 @@ int wmain(int argc, wchar_t* argv[]) {
         return 1;
     }
 
+    bool allSucceeded = true;
     for (int i = 1; i < argc; i++) {
         fs::path inputPath = argv[i];
         fs::path outputPath = inputPath;
@@ -212,12 +220,11 @@ int wmain(int argc, wchar_t* argv[]) {
         }
         outputPath.replace_extension(L".chs");
 
-        PackDirectory(inputPath, outputPath);
+        if (!PackDirectory(inputPath, outputPath)) allSucceeded = false;
     }
 
-    if (g_compressor) CloseCompressor(g_compressor);
-
+    g_compressor.Close();
     std::wcout << L"\n所有任务已结束。";
     system("pause");
-    return 0;
+    return allSucceeded ? 0 : 2;
 }

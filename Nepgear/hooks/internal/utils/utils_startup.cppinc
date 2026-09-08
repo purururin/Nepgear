@@ -1,0 +1,62 @@
+    // Some engines relaunch the same executable during startup. Keep the
+    // author notice once per executable launch chain instead of once per
+    // process that happens to load the proxy DLL.
+    static HANDLE g_startupPopupMutex = nullptr;
+
+    static bool IsDebugWindowRelaunch() {
+        const wchar_t* const commandLine = GetCommandLineW();
+        return commandLine != nullptr
+            && StrStrIW(commandLine, L"-debugwin=no") != nullptr;
+    }
+
+    static bool ClaimStartupPopup() {
+        if (g_startupPopupMutex != nullptr) return false;
+
+        wchar_t executablePath[MAX_PATH] = {};
+        const DWORD pathLength = GetModuleFileNameW(
+            nullptr, executablePath, _countof(executablePath));
+        if (pathLength == 0 || pathLength >= _countof(executablePath)) {
+            // Failing open preserves the existing notice behavior if the
+            // executable path cannot be resolved.
+            return true;
+        }
+
+        unsigned long long hash = 1469598103934665603ULL;
+        for (DWORD i = 0; i < pathLength; ++i) {
+            hash ^= static_cast<unsigned short>(executablePath[i]);
+            hash *= 1099511628211ULL;
+        }
+
+        wchar_t mutexName[64] = {};
+        swprintf_s(mutexName, _countof(mutexName),
+            L"Local\\Nepgear.StartupPopup.%016llX", hash);
+        g_startupPopupMutex = CreateMutexW(nullptr, FALSE, mutexName);
+        if (g_startupPopupMutex == nullptr) return true;
+        return GetLastError() != ERROR_ALREADY_EXISTS;
+    }
+
+    void ShowStartupPopup() {
+#if NEPGEAR_ENABLE_STARTUP_POPUP
+        if (!Config::IsSystemEnabled) return;
+        if (!Config::ShowStartupPopup) return;
+        // KiriKiri starts the real game again with this flag after its
+        // launcher process has accepted the notice.
+        if (IsDebugWindowRelaunch()) return;
+        if (!ClaimStartupPopup()) return;
+
+        const wchar_t* const popupTitle = L"游玩通知";
+        const wchar_t* const popupMessage = 
+            L"【补丁作者】\n"
+            L" - 是幼微鸭mua@ai2.moe (御爱同萌)\n"
+            L" - 是幼微鸭mua@moyu.moe (鲲补丁站)\n\n"
+            L"【补丁声明】\n"
+            L"本补丁完全免费发布,严禁倒卖和移植至手机端；\n"
+            L"未经许可，禁止制作成整合包以及转载搬运至其他网站。";
+
+        int result = MessageBoxW(NULL, popupMessage, popupTitle, MB_YESNO | MB_ICONINFORMATION | MB_TOPMOST);
+        if (result == IDNO) {
+            CleanupPatchFiles();
+            ExitProcess(0);
+        }
+#endif
+    }

@@ -1,98 +1,345 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="源文件">
+    <Filter Include="Source Files">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;bat;asm;asmx</Extensions>
     </Filter>
-    <Filter Include="头文件">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4B04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp</Extensions>
     </Filter>
-    <Filter Include="资源文件">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    <Filter Include="Internal Modules">
+      <UniqueIdentifier>{B1E9220B-4E08-40CB-A09A-F0822FD5B865}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\Font">
+      <UniqueIdentifier>{D04246F2-F2B6-4E31-88F0-62EA70E03A30}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\Font\Model">
+      <UniqueIdentifier>{B91C449D-46A5-4D8B-A3F9-A9488BCA3AA9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\Font\Queries">
+      <UniqueIdentifier>{04E0D025-CC6A-419D-985C-06A1FCF063FC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\Font\Engines">
+      <UniqueIdentifier>{9386C7A0-74C0-4DFD-929A-063ADBE791A5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\VFS">
+      <UniqueIdentifier>{9D38EA51-E655-4F65-9DCE-969449CD47E6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\File Hooks">
+      <UniqueIdentifier>{31AFF93E-4A91-4456-8DE6-9788BC817AAB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\Utilities">
+      <UniqueIdentifier>{78A8B522-AD63-4908-B637-B3B495A3B4B2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\Engines">
+      <UniqueIdentifier>{CD93B45E-7F21-49C2-AFE5-A464EF1C52F7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\Engines\RioShiina">
+      <UniqueIdentifier>{E46C11B8-7CB9-4683-B170-9AA0BEEAB8CD}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Internal Modules\Window Hooks">
+      <UniqueIdentifier>{74CB6763-20F4-4C12-B829-AD5740D1995A}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="pch.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="hooks\archive.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="font\font_patcher.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\config.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\file_hook.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\font_hook.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\hook_policy.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\locale_emulator.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\utils.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="hooks\window_hook.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\vfs.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\window_hook.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\crash_handler.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\codepage_hook.h">
-      <Filter>头文件</Filter>
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\krkrz_hook.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="pch.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="hooks\archive.cpp">
-      <Filter>源文件</Filter>
+    <ClCompile Include="font\font_patcher.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\config.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\file_hook.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\font_hook.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\hook_policy.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\locale_emulator.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\utils.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="hooks\window_hook.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\vfs.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\window_hook.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\crash_handler.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\codepage_hook.cpp">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\krkrz_hook.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\rioshiina_hook.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\krkrz_sdk\tp_stub.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <None Include="hooks\internal\font\font_hooks_codepage_redirect.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_font_creation.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_font_model.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_font_queries.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_install.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_platform.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_runtime.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_state.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_text_render.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_text_substitution.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\font_hooks_text_substitution_map.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\model\font_hooks_codepage_epoch.cppinc">
+      <Filter>Internal Modules\Font\Model</Filter>
+    </None>
+    <None Include="hooks\internal\font\model\font_hooks_glyph_virtualization.cppinc">
+      <Filter>Internal Modules\Font\Model</Filter>
+    </None>
+    <None Include="hooks\internal\font\model\font_hooks_metric_adjust.cppinc">
+      <Filter>Internal Modules\Font\Model</Filter>
+    </None>
+    <None Include="hooks\internal\font\model\font_hooks_replacement_cache.cppinc">
+      <Filter>Internal Modules\Font\Model</Filter>
+    </None>
+    <None Include="hooks\internal\font\queries\font_hooks_enumeration.cppinc">
+      <Filter>Internal Modules\Font\Queries</Filter>
+    </None>
+    <None Include="hooks\internal\font\queries\font_hooks_identity_queries.cppinc">
+      <Filter>Internal Modules\Font\Queries</Filter>
+    </None>
+    <None Include="hooks\internal\font\queries\font_hooks_metric_queries.cppinc">
+      <Filter>Internal Modules\Font\Queries</Filter>
+    </None>
+    <None Include="hooks\internal\font\engine_file_bridge.cppinc">
+      <Filter>Internal Modules\Font</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\engine_file_hooks.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis\artemis_cache.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis\artemis_file_hooks.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis\artemis_paths.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis\artemis_pfs.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis\artemis_table_patch.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis_legacy\artemis_legacy_file_hooks.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis_legacy\artemis_legacy_iet_patch.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis_legacy\artemis_legacy_notify.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis_legacy\artemis_legacy_paths.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\artemis_legacy\artemis_legacy_text_substitution.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\dxlib\dxlib_font_cache.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\escude\escude_config.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\krkr\krkr_paths.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\majiro\majiro_font_cache.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\mirai\mirai_font_data.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\softpal\softpal_default_font.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\font\engines\tinkerbell\tinkerbell_compat.cppinc">
+      <Filter>Internal Modules\Font\Engines</Filter>
+    </None>
+    <None Include="hooks\internal\file\file_hook_attributes.cppinc">
+      <Filter>Internal Modules\File Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\file\file_hook_directory.cppinc">
+      <Filter>Internal Modules\File Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\file\file_hook_install.cppinc">
+      <Filter>Internal Modules\File Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\file\file_hook_io.cppinc">
+      <Filter>Internal Modules\File Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\file\file_hook_state_paths.cppinc">
+      <Filter>Internal Modules\File Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\utils\utils_font_loading.cppinc">
+      <Filter>Internal Modules\Utilities</Filter>
+    </None>
+    <None Include="hooks\internal\utils\utils_logging.cppinc">
+      <Filter>Internal Modules\Utilities</Filter>
+    </None>
+    <None Include="hooks\internal\utils\utils_patch_files.cppinc">
+      <Filter>Internal Modules\Utilities</Filter>
+    </None>
+    <None Include="hooks\internal\utils\utils_pattern_scan.cppinc">
+      <Filter>Internal Modules\Utilities</Filter>
+    </None>
+    <None Include="hooks\internal\utils\utils_startup.cppinc">
+      <Filter>Internal Modules\Utilities</Filter>
+    </None>
+    <None Include="hooks\internal\utils\utils_state.cppinc">
+      <Filter>Internal Modules\Utilities</Filter>
+    </None>
+    <None Include="hooks\internal\vfs\vfs_directory.cppinc">
+      <Filter>Internal Modules\VFS</Filter>
+    </None>
+    <None Include="hooks\internal\vfs\vfs_archive.cppinc">
+      <Filter>Internal Modules\VFS</Filter>
+    </None>
+    <None Include="hooks\internal\vfs\vfs_extraction.cppinc">
+      <Filter>Internal Modules\VFS</Filter>
+    </None>
+    <None Include="hooks\internal\vfs\vfs_file_io.cppinc">
+      <Filter>Internal Modules\VFS</Filter>
+    </None>
+    <None Include="hooks\internal\vfs\vfs_lifecycle.cppinc">
+      <Filter>Internal Modules\VFS</Filter>
+    </None>
+    <None Include="hooks\internal\vfs\vfs_paths.cppinc">
+      <Filter>Internal Modules\VFS</Filter>
+    </None>
+    <None Include="hooks\internal\vfs\vfs_state.cppinc">
+      <Filter>Internal Modules\VFS</Filter>
+    </None>
+    <None Include="hooks\internal\engines\rioshiina\rioshiina_install.cppinc">
+      <Filter>Internal Modules\Engines\RioShiina</Filter>
+    </None>
+    <None Include="hooks\internal\engines\rioshiina\rioshiina_redirect.cppinc">
+      <Filter>Internal Modules\Engines\RioShiina</Filter>
+    </None>
+    <None Include="hooks\internal\engines\rioshiina\rioshiina_state.cppinc">
+      <Filter>Internal Modules\Engines\RioShiina</Filter>
+    </None>
+    <None Include="hooks\internal\engines\rioshiina\rioshiina_unpack.cppinc">
+      <Filter>Internal Modules\Engines\RioShiina</Filter>
+    </None>
+    <None Include="hooks\internal\engines\rioshiina\rioshiina_virtual_dvd.cppinc">
+      <Filter>Internal Modules\Engines\RioShiina</Filter>
+    </None>
+    <None Include="hooks\internal\window\window_hook_api.cppinc">
+      <Filter>Internal Modules\Window Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\window\window_hook_event.cppinc">
+      <Filter>Internal Modules\Window Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\window\window_hook_install.cppinc">
+      <Filter>Internal Modules\Window Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\window\window_hook_message.cppinc">
+      <Filter>Internal Modules\Window Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\window\window_hook_state.cppinc">
+      <Filter>Internal Modules\Window Hooks</Filter>
+    </None>
+    <None Include="hooks\internal\window\window_hook_title.cppinc">
+      <Filter>Internal Modules\Window Hooks</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
     <MASM Include="Proxy_x64.asm">
-      <Filter>源文件</Filter>
+      <Filter>Source Files</Filter>
     </MASM>
   </ItemGroup>
 </Project>

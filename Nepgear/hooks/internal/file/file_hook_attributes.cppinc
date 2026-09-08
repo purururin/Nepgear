@@ -1,0 +1,139 @@
+DWORD WINAPI newGetFileAttributesA(LPCSTR lpFileName) {
+    DWORD engineResult = INVALID_FILE_ATTRIBUTES;
+    if (FontEngineBridge::TryGetFileAttributesA(lpFileName, &engineResult)) {
+        return engineResult;
+    }
+    if (!Config::EnableFileHook || !VFS::IsActive()) {
+        return orgGetFileAttributesA(lpFileName);
+    }
+    InitPaths();
+    char relPath[MAX_PATH];
+    if (GetRelativePathA(lpFileName, relPath)) {
+        if (VFS::HasVirtualFileA(relPath)) {
+            if (Config::EnableDebug) Utils::Log("[VFS-AttribA] %s exists", lpFileName);
+            return FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY;
+        }
+        if (VFS::HasVirtualDirectoryA(relPath)) {
+            if (Config::EnableDebug) Utils::Log("[VFS-AttribA] %s is a virtual directory", lpFileName);
+            return FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY;
+        }
+    }
+    return orgGetFileAttributesA(lpFileName);
+}
+
+DWORD WINAPI newGetFileAttributesW(LPCWSTR lpFileName) {
+    DWORD engineResult = INVALID_FILE_ATTRIBUTES;
+    if (FontEngineBridge::TryGetFileAttributesW(lpFileName, &engineResult)) {
+        return engineResult;
+    }
+    if (!Config::EnableFileHook || !VFS::IsActive()) {
+        return orgGetFileAttributesW(lpFileName);
+    }
+    InitPaths();
+    wchar_t relPath[MAX_PATH];
+    if (GetRelativePathW(lpFileName, relPath)) {
+        if (VFS::HasVirtualFile(relPath)) {
+            if (Config::EnableDebug) Utils::Log("[VFS-AttribW] %S exists", lpFileName);
+            return FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY;
+        }
+        if (VFS::HasVirtualDirectory(relPath)) {
+            if (Config::EnableDebug) Utils::Log("[VFS-AttribW] %S is a virtual directory", lpFileName);
+            return FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY;
+        }
+    }
+    return orgGetFileAttributesW(lpFileName);
+}
+
+BOOL WINAPI newGetFileAttributesExA(LPCSTR lpFileName, GET_FILEEX_INFO_LEVELS fInfoLevelId, LPVOID lpFileInformation) {
+    BOOL engineResult = FALSE;
+    if (FontEngineBridge::TryGetFileAttributesExA(
+        lpFileName, fInfoLevelId, lpFileInformation, &engineResult)) {
+        return engineResult;
+    }
+    if (!Config::EnableFileHook || !VFS::IsActive()) {
+        return orgGetFileAttributesExA(lpFileName, fInfoLevelId, lpFileInformation);
+    }
+    InitPaths();
+    char relPath[MAX_PATH];
+    if (GetRelativePathA(lpFileName, relPath)) {
+        ULONGLONG virtualSize = 0;
+        if (VFS::TryGetVirtualFileSizeA(relPath, &virtualSize)) {
+            if (fInfoLevelId == GetFileExInfoStandard && lpFileInformation) {
+                WIN32_FILE_ATTRIBUTE_DATA* data = (WIN32_FILE_ATTRIBUTE_DATA*)lpFileInformation;
+                ZeroMemory(data, sizeof(WIN32_FILE_ATTRIBUTE_DATA));
+                data->dwFileAttributes = FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY;
+                data->nFileSizeLow = static_cast<DWORD>(virtualSize);
+                data->nFileSizeHigh = static_cast<DWORD>(virtualSize >> 32);
+            }
+            return TRUE;
+        }
+        if (VFS::HasVirtualDirectoryA(relPath)) {
+            if (fInfoLevelId == GetFileExInfoStandard && lpFileInformation) {
+                WIN32_FILE_ATTRIBUTE_DATA* data = (WIN32_FILE_ATTRIBUTE_DATA*)lpFileInformation;
+                ZeroMemory(data, sizeof(WIN32_FILE_ATTRIBUTE_DATA));
+                data->dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY;
+            }
+            return TRUE;
+        }
+    }
+    return orgGetFileAttributesExA(lpFileName, fInfoLevelId, lpFileInformation);
+}
+
+BOOL WINAPI newGetFileAttributesExW(LPCWSTR lpFileName, GET_FILEEX_INFO_LEVELS fInfoLevelId, LPVOID lpFileInformation) {
+    BOOL engineResult = FALSE;
+    if (FontEngineBridge::TryGetFileAttributesExW(
+        lpFileName, fInfoLevelId, lpFileInformation, &engineResult)) {
+        return engineResult;
+    }
+    if (!Config::EnableFileHook || !VFS::IsActive()) {
+        return orgGetFileAttributesExW(lpFileName, fInfoLevelId, lpFileInformation);
+    }
+    InitPaths();
+    wchar_t relPath[MAX_PATH];
+    if (GetRelativePathW(lpFileName, relPath)) {
+        ULONGLONG virtualSize = 0;
+        if (VFS::TryGetVirtualFileSize(relPath, &virtualSize)) {
+            if (fInfoLevelId == GetFileExInfoStandard && lpFileInformation) {
+                WIN32_FILE_ATTRIBUTE_DATA* data = (WIN32_FILE_ATTRIBUTE_DATA*)lpFileInformation;
+                ZeroMemory(data, sizeof(WIN32_FILE_ATTRIBUTE_DATA));
+                data->dwFileAttributes = FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY;
+                data->nFileSizeLow = static_cast<DWORD>(virtualSize);
+                data->nFileSizeHigh = static_cast<DWORD>(virtualSize >> 32);
+            }
+            return TRUE;
+        }
+        if (VFS::HasVirtualDirectory(relPath)) {
+            if (fInfoLevelId == GetFileExInfoStandard && lpFileInformation) {
+                WIN32_FILE_ATTRIBUTE_DATA* data = (WIN32_FILE_ATTRIBUTE_DATA*)lpFileInformation;
+                ZeroMemory(data, sizeof(WIN32_FILE_ATTRIBUTE_DATA));
+                data->dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY;
+            }
+            return TRUE;
+        }
+    }
+    return orgGetFileAttributesExW(lpFileName, fInfoLevelId, lpFileInformation);
+}
+
+BOOL WINAPI newCreateDirectoryA(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
+    if (Config::EnableFileHook && VFS::IsActive()) {
+        InitPaths();
+        char relPath[MAX_PATH];
+        if (GetRelativePathA(lpPathName, relPath) && VFS::HasVirtualDirectoryA(relPath)) {
+            SetLastError(ERROR_ALREADY_EXISTS);
+            return FALSE;
+        }
+    }
+    return orgCreateDirectoryA(lpPathName, lpSecurityAttributes);
+}
+
+BOOL WINAPI newCreateDirectoryW(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
+    if (Config::EnableFileHook && VFS::IsActive()) {
+        InitPaths();
+        wchar_t relPath[MAX_PATH];
+        if (GetRelativePathW(lpPathName, relPath) && VFS::HasVirtualDirectory(relPath)) {
+            SetLastError(ERROR_ALREADY_EXISTS);
+            return FALSE;
+        }
+    }
+    return orgCreateDirectoryW(lpPathName, lpSecurityAttributes);
+}

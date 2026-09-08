@@ -1,0 +1,26 @@
+//
+// Registry & Virtual DVD
+//
+LSTATUS WINAPI MyRegOpenKeyExA(HKEY hKey, LPCSTR lpSubKey, DWORD ulOptions, REGSAM samDesired, PHKEY phkResult) {
+    return RegOpenKeyExW(hKey, SJIS_to_Wide(lpSubKey).c_str(), ulOptions, samDesired, phkResult);
+}
+
+DWORD WINAPI MyRSGetFileSize(HANDLE hFile, LPDWORD lpFileSizeHigh) {
+    if (hFile == hSpecDvdFile && hFile != nullptr) return (DWORD)Config::RioShiinaSpecDvdFileSize;
+    return orgRSGetFileSize(hFile, lpFileSizeHigh);
+}
+
+DWORD WINAPI MyRSSetFilePointer(HANDLE hFile, LONG lDistanceToMove, PLONG lpDistanceToMoveHigh, DWORD dwMoveMethod) {
+    if (hFile == hSpecDvdFile && hFile != nullptr) return (DWORD)lDistanceToMove;
+    return orgRSSetFilePointer(hFile, lDistanceToMove, lpDistanceToMoveHigh, dwMoveMethod);
+}
+
+HANDLE WINAPI MyRSCreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
+    if (lpFileName && std::string_view(lpFileName).starts_with("W:\\")) {
+        if (!hSpecDvdFile) hSpecDvdFile = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        return hSpecDvdFile;
+    }
+    return orgRSCreateFileA(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+}
+
+

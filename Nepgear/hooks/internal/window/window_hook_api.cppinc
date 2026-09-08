@@ -1,0 +1,47 @@
+static HWND WINAPI newCreateWindowExA(
+    DWORD exStyle, LPCSTR className, LPCSTR windowName, DWORD style,
+    int x, int y, int width, int height, HWND parent, HMENU menu,
+    HINSTANCE instance, LPVOID param) {
+    EnsureWindowMessageHook();
+    HWND hWnd = orgCreateWindowExA(exStyle, className, windowName, style,
+        x, y, width, height, parent, menu, instance, param);
+    if (hWnd) {
+        InstallWindowTitleSubclass(hWnd);
+        ForceUnicodeTitle(hWnd);
+    }
+    return hWnd;
+}
+
+static HWND WINAPI newCreateWindowExW(
+    DWORD exStyle, LPCWSTR className, LPCWSTR windowName, DWORD style,
+    int x, int y, int width, int height, HWND parent, HMENU menu,
+    HINSTANCE instance, LPVOID param) {
+    EnsureWindowMessageHook();
+    HWND hWnd = orgCreateWindowExW(exStyle, className, windowName, style,
+        x, y, width, height, parent, menu, instance, param);
+    if (hWnd) {
+        InstallWindowTitleSubclass(hWnd);
+        ForceUnicodeTitle(hWnd);
+    }
+    return hWnd;
+}
+
+static BOOL WINAPI newSetWindowTextA(HWND hWnd, LPCSTR text) {
+    EnsureWindowMessageHook();
+    BOOL result = orgSetWindowTextA(hWnd, text);
+    if (result) {
+        InstallWindowTitleSubclass(hWnd);
+        ForceUnicodeTitle(hWnd);
+    }
+    return result;
+}
+
+static BOOL WINAPI newSetWindowTextW(HWND hWnd, LPCWSTR text) {
+    EnsureWindowMessageHook();
+    BOOL result = orgSetWindowTextW(hWnd, text);
+    if (result) {
+        InstallWindowTitleSubclass(hWnd);
+        ForceUnicodeTitle(hWnd);
+    }
+    return result;
+}

@@ -1,0 +1,11 @@
+static void CALLBACK WinEventProc(
+    HWINEVENTHOOK eventHook, DWORD event, HWND hWnd,
+    LONG objectId, LONG childId, DWORD eventThread, DWORD eventTime) {
+    if (objectId != OBJID_WINDOW || childId != CHILDID_SELF || !hWnd) return;
+
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hWnd, &processId);
+    if (processId == GetCurrentProcessId()) {
+        ForceUnicodeTitle(hWnd);
+    }
+}

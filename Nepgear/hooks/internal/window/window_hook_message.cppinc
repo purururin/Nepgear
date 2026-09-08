@@ -1,0 +1,64 @@
+static LRESULT CALLBACK WindowCallWndRetProc(
+    int code, WPARAM wParam, LPARAM lParam) {
+    if (code >= 0 && lParam) {
+        const CWPRETSTRUCT* message = (const CWPRETSTRUCT*)lParam;
+        if (message->message == WM_SETTEXT) {
+            ForceUnicodeTitle(message->hwnd);
+        }
+    }
+    return CallNextHookEx(g_callWndRetHook, code, wParam, lParam);
+}
+
+static bool EnsureWindowMessageHook() {
+    if (g_callWndRetHook) return true;
+
+    g_callWndRetHook = SetWindowsHookExW(
+        WH_CALLWNDPROCRET, WindowCallWndRetProc, NULL, GetCurrentThreadId());
+    if (!g_callWndRetHook && Config::EnableDebug) {
+        Utils::Log("[Window] WH_CALLWNDPROCRET installation failed on tid=%lu error=%lu",
+            GetCurrentThreadId(), GetLastError());
+    }
+    return g_callWndRetHook != NULL;
+}
+
+static void RemoveWindowMessageHook() {
+    if (!g_callWndRetHook) return;
+    UnhookWindowsHookEx(g_callWndRetHook);
+    g_callWndRetHook = NULL;
+}
+
+static void EnforceTitleAfterWindowProc(HWND hWnd, UINT message) {
+    if (message == WM_SETTEXT) {
+        ForceUnicodeTitle(hWnd);
+    }
+}
+
+static LRESULT WINAPI newDefWindowProcA(
+    HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    LRESULT result = orgDefWindowProcA(hWnd, message, wParam, lParam);
+    EnforceTitleAfterWindowProc(hWnd, message);
+    return result;
+}
+
+static LRESULT WINAPI newDefWindowProcW(
+    HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    LRESULT result = orgDefWindowProcW(hWnd, message, wParam, lParam);
+    EnforceTitleAfterWindowProc(hWnd, message);
+    return result;
+}
+
+static LRESULT WINAPI newCallWindowProcA(
+    WNDPROC windowProc, HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    LRESULT result = orgCallWindowProcA(
+        windowProc, hWnd, message, wParam, lParam);
+    EnforceTitleAfterWindowProc(hWnd, message);
+    return result;
+}
+
+static LRESULT WINAPI newCallWindowProcW(
+    WNDPROC windowProc, HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    LRESULT result = orgCallWindowProcW(
+        windowProc, hWnd, message, wParam, lParam);
+    EnforceTitleAfterWindowProc(hWnd, message);
+    return result;
+}

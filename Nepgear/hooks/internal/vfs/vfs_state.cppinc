@@ -1,0 +1,68 @@
+typedef BOOL(WINAPI* pReadFile)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
+typedef BOOL(WINAPI* pSetFilePointerEx)(HANDLE, LARGE_INTEGER, PLARGE_INTEGER, DWORD);
+typedef BOOL(WINAPI* pCloseHandle)(HANDLE);
+typedef HANDLE(WINAPI* pCreateFileW)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+typedef HANDLE(WINAPI* pFindFirstFileW)(LPCWSTR, LPWIN32_FIND_DATAW);
+typedef BOOL(WINAPI* pFindNextFileW)(HANDLE, LPWIN32_FIND_DATAW);
+typedef BOOL(WINAPI* pFindClose)(HANDLE);
+typedef HANDLE(WINAPI* pFindFirstFileA)(LPCSTR, LPWIN32_FIND_DATAA);
+typedef BOOL(WINAPI* pFindNextFileA)(HANDLE, LPWIN32_FIND_DATAA);
+typedef HANDLE(WINAPI* pFindFirstFileExW)(LPCWSTR, FINDEX_INFO_LEVELS, LPVOID,
+    FINDEX_SEARCH_OPS, LPVOID, DWORD);
+
+// Shared Global State
+static pReadFile g_OrigReadFile = nullptr;
+static pSetFilePointerEx g_OrigSetFilePointerEx = nullptr;
+static pCloseHandle g_OrigCloseHandle = nullptr;
+static pFindFirstFileW g_OrigFindFirstFileW = nullptr;
+static pFindNextFileW g_OrigFindNextFileW = nullptr;
+static pFindClose g_OrigFindClose = nullptr;
+static pFindFirstFileA g_OrigFindFirstFileA = nullptr;
+static pFindNextFileA g_OrigFindNextFileA = nullptr;
+static pFindFirstFileExW g_OrigFindFirstFileExW = nullptr;
+
+static pReadFile g_RawReadFile = nullptr;
+static pSetFilePointerEx g_RawSetFilePointerEx = nullptr;
+static pCloseHandle g_RawCloseHandle = nullptr;
+static pCreateFileW g_RawCreateFileW = nullptr;
+
+namespace {
+    struct VirtualFindState {
+        HANDLE realHandle;
+        bool usingRealHandle;
+        std::vector<std::wstring> seenFiles;
+        std::vector<VFS::VirtualFileEntry*> matches;
+        size_t matchIndex;
+
+        VirtualFindState() : realHandle(INVALID_HANDLE_VALUE), usingRealHandle(false), matchIndex(0) {}
+        ~VirtualFindState() {
+            // We should use the original CloseHandle if we have it
+            // but the state doesn't know about it. 
+            // In practice, VirtualFindClose handles the realHandle.
+        }
+    };
+
+    std::unordered_map<std::wstring, VFS::VirtualFileEntry> g_FileIndex;
+    std::unordered_map<std::wstring, std::vector<VFS::VirtualFileEntry*>> g_DirectoryIndex;
+    std::unordered_map<HANDLE, std::unique_ptr<VFS::VirtualFileHandle>> g_HandleMap;
+    std::unordered_map<HANDLE, std::unique_ptr<VirtualFindState>> g_FindMap;
+    std::recursive_mutex g_Mutex;
+
+    // RAII helper for Windows handles using the raw CloseHandle
+    struct ScopedRawHandle {
+        HANDLE h;
+        ScopedRawHandle(HANDLE handle = INVALID_HANDLE_VALUE) : h(handle) {}
+        ~ScopedRawHandle() { if (h != INVALID_HANDLE_VALUE && h != NULL && g_RawCloseHandle) g_RawCloseHandle(h); }
+        operator HANDLE() const { return h; }
+        HANDLE release() { HANDLE tmp = h; h = INVALID_HANDLE_VALUE; return tmp; }
+    };
+
+    HANDLE g_ArchiveHandle = INVALID_HANDLE_VALUE;
+    wchar_t g_ArchivePath[MAX_PATH] = { 0 };
+    wchar_t g_LooseFolderPath[MAX_PATH] = { 0 };
+    wchar_t g_HybridCacheDir[MAX_PATH] = { 0 };
+    ULONGLONG g_ArchiveCacheKey = 0;
+    bool g_IsActive = false;
+    // Keep synthetic handles positive for engines that store HANDLE in a signed int.
+    uintptr_t g_VirtualHandleCounter = 0x4F000000;
+}

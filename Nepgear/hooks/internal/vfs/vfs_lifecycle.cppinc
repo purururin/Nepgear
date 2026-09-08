@@ -1,0 +1,105 @@
+    bool Initialize(HMODULE hModule) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        if (g_IsActive) return true;
+
+        g_RawReadFile = (pReadFile)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "ReadFile");
+        g_RawSetFilePointerEx = (pSetFilePointerEx)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetFilePointerEx");
+        g_RawCloseHandle = (pCloseHandle)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CloseHandle");
+        g_RawCreateFileW = (pCreateFileW)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateFileW");
+
+        if (!g_RawReadFile || !g_RawSetFilePointerEx || !g_RawCloseHandle || !g_RawCreateFileW) return false;
+        if (!Config::EnableFileHook) return false;
+
+        // Setup paths
+        wchar_t baseDir[MAX_PATH];
+        GetModuleFileNameW(hModule, baseDir, MAX_PATH);
+        PathRemoveFileSpecW(baseDir);
+
+        // Both modes can fall back to a stable real file when an engine requests
+        // kernel-only semantics such as write access, mapping, or overlapped I/O.
+        const DWORD tempLength = GetTempPathW(MAX_PATH, g_HybridCacheDir);
+        if (tempLength == 0 || tempLength >= MAX_PATH) g_HybridCacheDir[0] = L'\0';
+
+        wcscpy_s(g_LooseFolderPath, baseDir);
+        PathAppendW(g_LooseFolderPath, Config::RedirectFolderW);
+
+        if (PathFileExistsW(g_LooseFolderPath) && PathIsDirectoryW(g_LooseFolderPath)) {
+            ScanLooseFiles(g_LooseFolderPath, g_LooseFolderPath, L"");
+        }
+
+        wcscpy_s(g_ArchivePath, baseDir);
+        PathAppendW(g_ArchivePath, Config::ArchiveFileName);
+        if (!PathFileExistsW(g_ArchivePath)) {
+            wchar_t fb[MAX_PATH]; wcscpy_s(fb, baseDir);
+            PathAppendW(fb, Config::RedirectFolderW); PathAppendW(fb, Config::ArchiveFileName);
+            if (PathFileExistsW(fb)) wcscpy_s(g_ArchivePath, fb);
+        }
+
+        if (PathFileExistsW(g_ArchivePath)) {
+            ScopedRawHandle hArchive(g_RawCreateFileW(g_ArchivePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
+            if (hArchive != INVALID_HANDLE_VALUE) {
+                std::vector<VirtualFileEntry> archiveEntries;
+                if (ReadArchiveIndex(hArchive, archiveEntries)) {
+                    FILETIME archiveCreation = {};
+                    FILETIME archiveAccess = {};
+                    FILETIME archiveWrite = {};
+                    GetFileTime(hArchive, &archiveCreation, &archiveAccess, &archiveWrite);
+                    size_t inserted = 0;
+                    for (auto& entry : archiveEntries) {
+                        entry.creationTime = archiveCreation;
+                        entry.lastAccessTime = archiveAccess;
+                        entry.lastWriteTime = archiveWrite;
+                        std::wstring normalized = NormalizePath(entry.relativePath.c_str());
+                        if (IsReservedInternalPath(normalized)) continue;
+                        if (g_FileIndex.find(normalized) == g_FileIndex.end()) {
+                            g_FileIndex.emplace(std::move(normalized), std::move(entry));
+                            ++inserted;
+                        }
+                    }
+                    if (inserted > 0) {
+                        g_ArchiveCacheKey = ComputeArchiveCacheKey(hArchive, g_ArchivePath);
+                        g_ArchiveHandle = hArchive.release();
+                    }
+                } else {
+                    Utils::Log(Utils::LOG_WARN, "[VFS] Ignoring invalid archive: %S (error %lu)",
+                        g_ArchivePath, GetLastError());
+                }
+            }
+        }
+
+        g_IsActive = !g_FileIndex.empty();
+        if (g_IsActive) {
+            RebuildDirectoryIndex();
+            Utils::Log("[VFS] Initialized in %s mode with %zu files (%zu directories)", 
+                (Config::VFSMode == 0 ? "Modern" : "Legacy"), g_FileIndex.size(), g_DirectoryIndex.size());
+        }
+        return g_IsActive;
+    }
+
+    void Shutdown() {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        g_HandleMap.clear(); // std::unique_ptr will handle deletion
+        g_FindMap.clear();
+
+        g_FileIndex.clear();
+        g_DirectoryIndex.clear();
+        if (g_ArchiveHandle != INVALID_HANDLE_VALUE) {
+            if (g_RawCloseHandle) g_RawCloseHandle(g_ArchiveHandle);
+            g_ArchiveHandle = INVALID_HANDLE_VALUE;
+        }
+        g_IsActive = false;
+        g_ArchiveCacheKey = 0;
+    }
+
+    bool IsActive() { return g_IsActive; }
+
+    void SetOriginalFunctions(void* r, void* s, void* c) {
+        g_OrigReadFile = (pReadFile)r; g_OrigSetFilePointerEx = (pSetFilePointerEx)s; g_OrigCloseHandle = (pCloseHandle)c;
+    }
+
+    void SetFindFunctions(void* f1, void* f2, void* f3, void* f4, void* f5,
+        void* f6) {
+        g_OrigFindFirstFileW = (pFindFirstFileW)f1; g_OrigFindNextFileW = (pFindNextFileW)f2; g_OrigFindClose = (pFindClose)f3;
+        g_OrigFindFirstFileA = (pFindFirstFileA)f4; g_OrigFindNextFileA = (pFindNextFileA)f5;
+        g_OrigFindFirstFileExW = (pFindFirstFileExW)f6;
+    }

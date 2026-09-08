@@ -1,0 +1,67 @@
+static bool IsTopLevelWindowCandidate(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd)) return false;
+
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hWnd, &processId);
+    if (processId != GetCurrentProcessId()) return false;
+
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    return (style & WS_CHILD) == 0;
+}
+
+static bool ShouldModifyWindow(HWND hWnd) {
+    if (!IsTopLevelWindowCandidate(hWnd)) return false;
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    return (style & WS_CAPTION) == WS_CAPTION;
+}
+
+static void ForceUnicodeTitle(HWND hWnd) {
+    if (!Config::IsSystemEnabled || !Config::EnableWindowTitleHook ||
+        g_applyingWindowTitle || !ShouldModifyWindow(hWnd) ||
+        Config::CustomTitleW[0] == L'\0') {
+        return;
+    }
+
+    wchar_t currentTitle[512] = {};
+    orgDefWindowProcW(hWnd, WM_GETTEXT,
+        sizeof(currentTitle) / sizeof(currentTitle[0]), (LPARAM)currentTitle);
+    if (wcscmp(currentTitle, Config::CustomTitleW) == 0) return;
+
+    g_applyingWindowTitle = true;
+    orgDefWindowProcW(hWnd, WM_SETTEXT, 0, (LPARAM)Config::CustomTitleW);
+    g_applyingWindowTitle = false;
+}
+
+static LRESULT CALLBACK WindowTitleSubclassProc(
+    HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam,
+    UINT_PTR subclassId, DWORD_PTR referenceData) {
+    if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(hWnd, WindowTitleSubclassProc, subclassId);
+        return DefSubclassProc(hWnd, message, wParam, lParam);
+    }
+
+    LRESULT result = DefSubclassProc(hWnd, message, wParam, lParam);
+    if (message == WM_SETTEXT ||
+        message == WM_SHOWWINDOW ||
+        (message == WM_STYLECHANGED && (int)wParam == GWL_STYLE)) {
+        ForceUnicodeTitle(hWnd);
+    }
+    return result;
+}
+
+static bool InstallWindowTitleSubclass(HWND hWnd) {
+    if (!IsTopLevelWindowCandidate(hWnd)) return false;
+
+    DWORD windowThreadId = GetWindowThreadProcessId(hWnd, NULL);
+    if (windowThreadId != GetCurrentThreadId()) return false;
+
+    if (!SetWindowSubclass(hWnd, WindowTitleSubclassProc,
+        kWindowTitleSubclassId, 0)) {
+        if (Config::EnableDebug) {
+            Utils::Log("[Window] SetWindowSubclass failed for hwnd=%p error=%lu",
+                hWnd, GetLastError());
+        }
+        return false;
+    }
+    return true;
+}

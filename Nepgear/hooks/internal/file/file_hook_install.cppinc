@@ -1,0 +1,325 @@
+namespace Hooks {
+    namespace {
+        struct ModuleFileHookContext {
+            size_t patchedCount;
+            bool failed;
+            bool krkrPatchOnly;
+        };
+
+        PVOID FindKrkrPatchVfsReplacement(LPCSTR functionName) {
+            if (!functionName) return nullptr;
+
+#define MATCH_KRKR_FILE_API(name) if (strcmp(functionName, #name) == 0) return reinterpret_cast<PVOID>(new##name)
+            MATCH_KRKR_FILE_API(CreateFileA);
+            MATCH_KRKR_FILE_API(CreateFileW);
+            MATCH_KRKR_FILE_API(ReadFile);
+            MATCH_KRKR_FILE_API(WriteFile);
+            MATCH_KRKR_FILE_API(SetFilePointer);
+            MATCH_KRKR_FILE_API(SetFilePointerEx);
+            MATCH_KRKR_FILE_API(GetFileSize);
+            MATCH_KRKR_FILE_API(GetFileSizeEx);
+            MATCH_KRKR_FILE_API(GetFileTime);
+            MATCH_KRKR_FILE_API(SetEndOfFile);
+            MATCH_KRKR_FILE_API(CloseHandle);
+            MATCH_KRKR_FILE_API(GetFileType);
+            MATCH_KRKR_FILE_API(GetFileAttributesA);
+            MATCH_KRKR_FILE_API(GetFileAttributesW);
+            MATCH_KRKR_FILE_API(GetFileAttributesExA);
+            MATCH_KRKR_FILE_API(GetFileAttributesExW);
+            MATCH_KRKR_FILE_API(FindFirstFileA);
+            MATCH_KRKR_FILE_API(FindFirstFileW);
+            MATCH_KRKR_FILE_API(FindNextFileA);
+            MATCH_KRKR_FILE_API(FindNextFileW);
+            MATCH_KRKR_FILE_API(FindClose);
+#undef MATCH_KRKR_FILE_API
+            return nullptr;
+        }
+
+        PVOID FindModuleFileHookReplacement(LPCSTR functionName) {
+            if (!functionName) return nullptr;
+
+#define MATCH_FILE_API(name) if (strcmp(functionName, #name) == 0) return reinterpret_cast<PVOID>(new##name)
+            MATCH_FILE_API(CreateFileA);
+            MATCH_FILE_API(CreateFileW);
+            MATCH_FILE_API(ReadFile);
+            MATCH_FILE_API(WriteFile);
+            MATCH_FILE_API(SetFilePointer);
+            MATCH_FILE_API(SetFilePointerEx);
+            MATCH_FILE_API(GetFileSize);
+            MATCH_FILE_API(GetFileSizeEx);
+            MATCH_FILE_API(GetFileTime);
+            MATCH_FILE_API(SetEndOfFile);
+            MATCH_FILE_API(CloseHandle);
+            MATCH_FILE_API(GetFileInformationByHandle);
+            MATCH_FILE_API(GetFileType);
+            MATCH_FILE_API(GetFileAttributesA);
+            MATCH_FILE_API(GetFileAttributesW);
+            MATCH_FILE_API(GetFileAttributesExA);
+            MATCH_FILE_API(GetFileAttributesExW);
+            MATCH_FILE_API(CreateDirectoryA);
+            MATCH_FILE_API(CreateDirectoryW);
+            MATCH_FILE_API(FindFirstFileA);
+            MATCH_FILE_API(FindFirstFileW);
+            MATCH_FILE_API(FindFirstFileExA);
+            MATCH_FILE_API(FindFirstFileExW);
+            MATCH_FILE_API(FindNextFileA);
+            MATCH_FILE_API(FindNextFileW);
+            MATCH_FILE_API(FindClose);
+#undef MATCH_FILE_API
+            return nullptr;
+        }
+
+        BOOL CALLBACK PatchModuleFileImport(PVOID context, DWORD, LPCSTR functionName,
+            PVOID* functionSlot) {
+            ModuleFileHookContext* state = static_cast<ModuleFileHookContext*>(context);
+            if (!state || !functionSlot) return TRUE;
+
+            PVOID replacement = state->krkrPatchOnly
+                ? FindKrkrPatchVfsReplacement(functionName)
+                : FindModuleFileHookReplacement(functionName);
+            if (!replacement || *functionSlot == replacement) return TRUE;
+
+            DWORD oldProtection = 0;
+            if (!VirtualProtect(functionSlot, sizeof(*functionSlot), PAGE_READWRITE,
+                &oldProtection)) {
+                state->failed = true;
+                return TRUE;
+            }
+
+            InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(functionSlot), replacement);
+            DWORD ignoredProtection = 0;
+            if (!VirtualProtect(functionSlot, sizeof(*functionSlot), oldProtection,
+                &ignoredProtection)) {
+                state->failed = true;
+            }
+            FlushInstructionCache(GetCurrentProcess(), functionSlot, sizeof(*functionSlot));
+            ++state->patchedCount;
+            return TRUE;
+        }
+
+        size_t PatchCachedFunctionPointers(
+            HMODULE module, PVOID original, PVOID replacement) {
+            if (!module || !original || !replacement || original == replacement) return 0;
+
+            auto* dos = reinterpret_cast<PIMAGE_DOS_HEADER>(module);
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+            auto* nt = reinterpret_cast<PIMAGE_NT_HEADERS>(
+                reinterpret_cast<BYTE*>(module) + dos->e_lfanew);
+            if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
+
+            size_t patched = 0;
+            PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
+            for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+                if (!(section->Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
+
+                BYTE* start = reinterpret_cast<BYTE*>(module) + section->VirtualAddress;
+                const size_t size = section->Misc.VirtualSize;
+                for (size_t offset = 0; offset + sizeof(PVOID) <= size;
+                    offset += sizeof(PVOID)) {
+                    auto* slot = reinterpret_cast<PVOID*>(start + offset);
+                    if (*slot != original) continue;
+
+                    DWORD oldProtection = 0;
+                    if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &oldProtection)) {
+                        continue;
+                    }
+                    InterlockedExchangePointer(
+                        reinterpret_cast<PVOID volatile*>(slot), replacement);
+                    DWORD ignoredProtection = 0;
+                    VirtualProtect(slot, sizeof(*slot), oldProtection, &ignoredProtection);
+                    ++patched;
+                }
+            }
+            return patched;
+        }
+
+        size_t PatchKrkrCachedWideFileApis(HMODULE module) {
+            struct ApiPatch {
+                const char* name;
+                PVOID replacement;
+            };
+            const ApiPatch patches[] = {
+                { "CreateFileW", reinterpret_cast<PVOID>(newCreateFileW) },
+                { "GetFileAttributesW", reinterpret_cast<PVOID>(newGetFileAttributesW) },
+                { "FindFirstFileW", reinterpret_cast<PVOID>(newFindFirstFileW) },
+                { "FindNextFileW", reinterpret_cast<PVOID>(newFindNextFileW) },
+            };
+
+            HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+            if (!kernel32) return 0;
+
+            size_t total = 0;
+            for (const auto& patch : patches) {
+                PVOID original = reinterpret_cast<PVOID>(
+                    GetProcAddress(kernel32, patch.name));
+                const size_t count = PatchCachedFunctionPointers(
+                    module, original, patch.replacement);
+                total += count;
+            }
+            return total;
+        }
+    }
+
+    bool InstallFileHookForModule(HMODULE module) {
+        if (!module || !Config::EnableFileHook || !VFS::IsActive()) return false;
+
+        InitPaths();
+        VFS::SetOriginalFunctions(
+            reinterpret_cast<void*>(orgReadFile),
+            reinterpret_cast<void*>(orgSetFilePointerEx),
+            reinterpret_cast<void*>(orgCloseHandle));
+        VFS::SetFindFunctions(
+            reinterpret_cast<void*>(orgFindFirstFileW),
+            reinterpret_cast<void*>(orgFindNextFileW),
+            reinterpret_cast<void*>(orgFindClose),
+            reinterpret_cast<void*>(orgFindFirstFileA),
+            reinterpret_cast<void*>(orgFindNextFileA),
+            reinterpret_cast<void*>(orgFindFirstFileExW));
+
+        ModuleFileHookContext context = {};
+        if (!DetourEnumerateImportsEx(module, &context, nullptr, PatchModuleFileImport)) {
+            Utils::Log(Utils::LOG_ERROR,
+                "[Core] Failed to enumerate packaged runtime file imports (error %lu).",
+                GetLastError());
+            return false;
+        }
+
+        Utils::Log("[Core] Module VFS installed: %zu imports patched%s.",
+            context.patchedCount, context.failed ? " with protection errors" : "");
+        return context.patchedCount > 0 && !context.failed;
+    }
+
+    FARPROC ResolveKrkrPatchVfsProcAddress(LPCSTR functionName) {
+        return reinterpret_cast<FARPROC>(FindKrkrPatchVfsReplacement(functionName));
+    }
+
+    bool InstallKrkrPatchVfsHook(HMODULE module) {
+        if (!module || !Config::EnableFileHook || !VFS::IsActive()) return false;
+
+        InitPaths();
+        HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+        orgKrkrDynamicCreateFileW = reinterpret_cast<pCreateFileW>(
+            kernel32 ? GetProcAddress(kernel32, "CreateFileW") : nullptr);
+        orgKrkrDynamicGetFileAttributesW = reinterpret_cast<pGetFileAttributesW>(
+            kernel32 ? GetProcAddress(kernel32, "GetFileAttributesW") : nullptr);
+        orgKrkrDynamicFindFirstFileW = reinterpret_cast<pFindFirstFileW>(
+            kernel32 ? GetProcAddress(kernel32, "FindFirstFileW") : nullptr);
+        orgKrkrDynamicFindNextFileW = reinterpret_cast<pFindNextFileW>(
+            kernel32 ? GetProcAddress(kernel32, "FindNextFileW") : nullptr);
+
+        const bool attachDynamicCreateFileW = orgKrkrDynamicCreateFileW
+            && orgKrkrDynamicCreateFileW != orgCreateFileW;
+        const bool attachDynamicGetFileAttributesW = orgKrkrDynamicGetFileAttributesW
+            && orgKrkrDynamicGetFileAttributesW != orgGetFileAttributesW;
+        const bool attachDynamicFindFirstFileW = orgKrkrDynamicFindFirstFileW
+            && orgKrkrDynamicFindFirstFileW != orgFindFirstFileW;
+        const bool attachDynamicFindNextFileW = orgKrkrDynamicFindNextFileW
+            && orgKrkrDynamicFindNextFileW != orgFindNextFileW;
+
+        LONG error = DetourTransactionBegin();
+        if (error == NO_ERROR) error = DetourUpdateThread(GetCurrentThread());
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgCreateFileA, newCreateFileA);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgCreateFileW, newCreateFileW);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgReadFile, newReadFile);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgWriteFile, newWriteFile);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgSetFilePointer, newSetFilePointer);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgSetFilePointerEx, newSetFilePointerEx);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgGetFileSize, newGetFileSize);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgGetFileSizeEx, newGetFileSizeEx);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgGetFileTime, newGetFileTime);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgSetEndOfFile, newSetEndOfFile);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgCloseHandle, newCloseHandle);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgGetFileType, newGetFileType);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgGetFileAttributesA, newGetFileAttributesA);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgGetFileAttributesW, newGetFileAttributesW);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgGetFileAttributesExA, newGetFileAttributesExA);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgGetFileAttributesExW, newGetFileAttributesExW);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgFindFirstFileA, newFindFirstFileA);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgFindFirstFileW, newFindFirstFileW);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgFindNextFileA, newFindNextFileA);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgFindNextFileW, newFindNextFileW);
+        if (error == NO_ERROR) error = DetourAttach(&(PVOID&)orgFindClose, newFindClose);
+        if (error == NO_ERROR && attachDynamicCreateFileW) {
+            error = DetourAttach(&(PVOID&)orgKrkrDynamicCreateFileW, newCreateFileW);
+        }
+        if (error == NO_ERROR && attachDynamicGetFileAttributesW) {
+            error = DetourAttach(&(PVOID&)orgKrkrDynamicGetFileAttributesW, newGetFileAttributesW);
+        }
+        if (error == NO_ERROR && attachDynamicFindFirstFileW) {
+            error = DetourAttach(&(PVOID&)orgKrkrDynamicFindFirstFileW, newFindFirstFileW);
+        }
+        if (error == NO_ERROR && attachDynamicFindNextFileW) {
+            error = DetourAttach(&(PVOID&)orgKrkrDynamicFindNextFileW, newFindNextFileW);
+        }
+        if (error == NO_ERROR) error = DetourTransactionCommit();
+        else DetourTransactionAbort();
+        if (error != NO_ERROR) {
+            Utils::Log(Utils::LOG_ERROR,
+                "[Krkrz-VFS] Failed to install selective API detours (error %ld).", error);
+            return false;
+        }
+
+        VFS::SetOriginalFunctions(
+            reinterpret_cast<void*>(orgReadFile),
+            reinterpret_cast<void*>(orgSetFilePointerEx),
+            reinterpret_cast<void*>(orgCloseHandle));
+        VFS::SetFindFunctions(
+            reinterpret_cast<void*>(orgFindFirstFileW),
+            reinterpret_cast<void*>(orgFindNextFileW),
+            reinterpret_cast<void*>(orgFindClose),
+            reinterpret_cast<void*>(orgFindFirstFileA),
+            reinterpret_cast<void*>(orgFindNextFileA),
+            reinterpret_cast<void*>(orgFindFirstFileExW));
+        const size_t cachedPointerCount = PatchKrkrCachedWideFileApis(module);
+        Utils::Log("[Krkrz-VFS] Selective XP3 VFS installed: 18 API detours, "
+            "%zu cached KiriKiri API pointers, no directory creation hooks.",
+            cachedPointerCount);
+        return true;
+    }
+
+    void InstallFileHook() {
+        if (!Config::EnableFileHook && !FontEngineBridge::IsRequired()) return;
+        InitPaths();
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(&(PVOID&)orgCreateFileA, newCreateFileA);
+        DetourAttach(&(PVOID&)orgCreateFileW, newCreateFileW);
+        DetourAttach(&(PVOID&)orgReadFile, newReadFile);
+        DetourAttach(&(PVOID&)orgWriteFile, newWriteFile);
+        DetourAttach(&(PVOID&)orgSetFilePointer, newSetFilePointer);
+        DetourAttach(&(PVOID&)orgSetFilePointerEx, newSetFilePointerEx);
+        DetourAttach(&(PVOID&)orgGetFileSize, newGetFileSize);
+        DetourAttach(&(PVOID&)orgGetFileSizeEx, newGetFileSizeEx);
+        DetourAttach(&(PVOID&)orgGetFileTime, newGetFileTime);
+        DetourAttach(&(PVOID&)orgSetEndOfFile, newSetEndOfFile);
+        DetourAttach(&(PVOID&)orgCloseHandle, newCloseHandle);
+        DetourAttach(&(PVOID&)orgGetFileInformationByHandle, newGetFileInformationByHandle);
+        DetourAttach(&(PVOID&)orgGetFileType, newGetFileType);
+        DetourAttach(&(PVOID&)orgGetFileAttributesA, newGetFileAttributesA);
+        DetourAttach(&(PVOID&)orgGetFileAttributesW, newGetFileAttributesW);
+        DetourAttach(&(PVOID&)orgGetFileAttributesExA, newGetFileAttributesExA);
+        DetourAttach(&(PVOID&)orgGetFileAttributesExW, newGetFileAttributesExW);
+        DetourAttach(&(PVOID&)orgCreateDirectoryA, newCreateDirectoryA);
+        DetourAttach(&(PVOID&)orgCreateDirectoryW, newCreateDirectoryW);
+        DetourAttach(&(PVOID&)orgFindFirstFileW, newFindFirstFileW);
+        DetourAttach(&(PVOID&)orgFindNextFileW, newFindNextFileW);
+        DetourAttach(&(PVOID&)orgFindFirstFileA, newFindFirstFileA);
+        DetourAttach(&(PVOID&)orgFindNextFileA, newFindNextFileA);
+        DetourAttach(&(PVOID&)orgFindFirstFileExW, newFindFirstFileExW);
+        DetourAttach(&(PVOID&)orgFindFirstFileExA, newFindFirstFileExA);
+        DetourAttach(&(PVOID&)orgFindClose, newFindClose);
+        DetourTransactionCommit();
+        FontEngineBridge::SetOriginalFileFunctions(
+            (void*)orgCreateFileA, (void*)orgCreateFileW,
+            (void*)orgGetFileAttributesA, (void*)orgGetFileAttributesW,
+            (void*)orgGetFileAttributesExA, (void*)orgGetFileAttributesExW,
+            (void*)orgFindFirstFileA, (void*)orgFindFirstFileW,
+            (void*)orgFindFirstFileExA, (void*)orgFindFirstFileExW);
+        VFS::SetOriginalFunctions((void*)orgReadFile, (void*)orgSetFilePointerEx, (void*)orgCloseHandle);
+        VFS::SetFindFunctions((void*)orgFindFirstFileW, (void*)orgFindNextFileW,
+            (void*)orgFindClose, (void*)orgFindFirstFileA,
+            (void*)orgFindNextFileA, (void*)orgFindFirstFileExW);
+
+        Utils::Log("[Core] VFS File Hook Installed.");
+    }
+}

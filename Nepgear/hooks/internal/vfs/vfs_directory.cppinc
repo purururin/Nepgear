@@ -1,0 +1,119 @@
+    static HANDLE PhysicalFindFirstFileW(
+        LPCWSTR lpFileName, LPWIN32_FIND_DATAW lpFindFileData) {
+        if (g_OrigFindFirstFileExW) {
+            return g_OrigFindFirstFileExW(lpFileName, FindExInfoStandard,
+                lpFindFileData, FindExSearchNameMatch, nullptr, 0);
+        }
+        return g_OrigFindFirstFileW
+            ? g_OrigFindFirstFileW(lpFileName, lpFindFileData)
+            : INVALID_HANDLE_VALUE;
+    }
+
+    HANDLE VirtualFindFirstFileW(LPCWSTR lpFileName, LPWIN32_FIND_DATAW lpFindFileData) {
+        if (!g_IsActive) return PhysicalFindFirstFileW(lpFileName, lpFindFileData);
+        
+        wchar_t fPath[MAX_PATH]; 
+        if (!GetFullPathNameW(lpFileName, MAX_PATH, fPath, NULL)) {
+            return PhysicalFindFirstFileW(lpFileName, lpFindFileData);
+        }
+        
+        std::wstring fstr = fPath; 
+        size_t last = fstr.find_last_of(L"\\/");
+        if (last == std::wstring::npos) {
+            return PhysicalFindFirstFileW(lpFileName, lpFindFileData);
+        }
+        
+        std::wstring sDir = NormalizePath(fstr.substr(0, last).c_str());
+        std::wstring pattern = fstr.substr(last + 1);
+        std::transform(pattern.begin(), pattern.end(), pattern.begin(), ::towlower);
+
+        auto state = std::make_unique<VirtualFindState>();
+        state->realHandle = PhysicalFindFirstFileW(lpFileName, lpFindFileData);
+        state->usingRealHandle = (state->realHandle != INVALID_HANDLE_VALUE);
+        state->matchIndex = 0;
+        if (state->usingRealHandle) state->seenFiles.push_back(lpFindFileData->cFileName);
+
+        // Get game root directory to match relative paths
+        wchar_t gameRoot[MAX_PATH]; 
+        GetModuleFileNameW(NULL, gameRoot, MAX_PATH); 
+        PathRemoveFileSpecW(gameRoot);
+        std::wstring gameRootDir = NormalizePath(gameRoot);
+
+        // Find the relative directory within the game root
+        std::wstring relDir;
+        if (sDir.length() >= gameRootDir.length() && _wcsnicmp(sDir.c_str(), gameRootDir.c_str(), gameRootDir.length()) == 0) {
+            relDir = sDir.substr(gameRootDir.length());
+            while (!relDir.empty() && relDir[0] == L'\\') relDir.erase(0, 1);
+        } else {
+            relDir = sDir; // Fallback
+        }
+
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto itDir = g_DirectoryIndex.find(relDir);
+        if (itDir != g_DirectoryIndex.end()) {
+            for (VFS::VirtualFileEntry* entry : itDir->second) {
+                const wchar_t* fileName = PathFindFileNameW(entry->relativePath.c_str());
+                if (PathMatchSpecW(fileName, pattern.c_str())) {
+                    state->matches.push_back(entry);
+                }
+            }
+        }
+
+        if (state->matches.empty() && !state->usingRealHandle) { return INVALID_HANDLE_VALUE; }
+        if (!state->usingRealHandle) {
+            VFS::VirtualFileEntry* m = state->matches[0];
+            wcscpy_s(lpFindFileData->cFileName, PathFindFileNameW(m->relativePath.c_str()));
+            lpFindFileData->nFileSizeLow = m->decompressedSize;
+            lpFindFileData->dwFileAttributes = FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY;
+            state->matchIndex++;
+        }
+        HANDLE hFake = (HANDLE)(++g_VirtualHandleCounter);
+        g_FindMap[hFake] = std::move(state);
+        return hFake;
+    }
+
+    BOOL VirtualFindNextFileW(HANDLE h, LPWIN32_FIND_DATAW fd) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_FindMap.find(h); if (it == g_FindMap.end()) return g_OrigFindNextFileW ? g_OrigFindNextFileW(h, fd) : FALSE;
+        VirtualFindState* s = it->second.get();
+        if (s->usingRealHandle && g_OrigFindNextFileW(s->realHandle, fd)) { s->seenFiles.push_back(fd->cFileName); return TRUE; }
+        s->usingRealHandle = false;
+        while (s->matchIndex < s->matches.size()) {
+            VFS::VirtualFileEntry* m = s->matches[s->matchIndex++];
+            const wchar_t* name = PathFindFileNameW(m->relativePath.c_str());
+            bool seen = false; for (auto& f : s->seenFiles) if (_wcsicmp(f.c_str(), name) == 0) { seen = true; break; }
+            if (seen) continue;
+            wcscpy_s(fd->cFileName, name);
+            fd->nFileSizeLow = m->decompressedSize;
+            fd->dwFileAttributes = FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY;
+            return TRUE;
+        }
+        SetLastError(ERROR_NO_MORE_FILES); return FALSE;
+    }
+
+    BOOL VirtualFindClose(HANDLE h) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_FindMap.find(h); if (it == g_FindMap.end()) return g_OrigFindClose ? g_OrigFindClose(h) : FALSE;
+        if (it->second->realHandle != INVALID_HANDLE_VALUE && g_OrigFindClose) g_OrigFindClose(it->second->realHandle);
+        g_FindMap.erase(it); return TRUE;
+    }
+
+    HANDLE VirtualFindFirstFileA(LPCSTR n, LPWIN32_FIND_DATAA fd) {
+        wchar_t w[MAX_PATH]; MultiByteToWideChar(Config::LE_Codepage, 0, n, -1, w, MAX_PATH);
+        WIN32_FIND_DATAW fw; HANDLE h = VirtualFindFirstFileW(w, &fw);
+        if (h != INVALID_HANDLE_VALUE) {
+            WideCharToMultiByte(Config::LE_Codepage, 0, fw.cFileName, -1, fd->cFileName, MAX_PATH, NULL, NULL);
+            fd->dwFileAttributes = fw.dwFileAttributes; fd->nFileSizeLow = fw.nFileSizeLow;
+            fd->ftLastWriteTime = fw.ftLastWriteTime;
+        }
+        return h;
+    }
+
+    BOOL VirtualFindNextFileA(HANDLE h, LPWIN32_FIND_DATAA fd) {
+        WIN32_FIND_DATAW fw; if (VirtualFindNextFileW(h, &fw)) {
+            WideCharToMultiByte(Config::LE_Codepage, 0, fw.cFileName, -1, fd->cFileName, MAX_PATH, NULL, NULL);
+            fd->dwFileAttributes = fw.dwFileAttributes; fd->nFileSizeLow = fw.nFileSizeLow;
+            return TRUE;
+        }
+        return FALSE;
+    }

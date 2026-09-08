@@ -13,6 +13,10 @@ namespace VFS {
         DWORD decompressedSize;
         bool isLooseFile;
         std::wstring looseFilePath;
+        FILETIME creationTime;
+        FILETIME lastAccessTime;
+        FILETIME lastWriteTime;
+        std::shared_ptr<const std::vector<BYTE>> decompressedData;
     };
 
     struct VirtualFileHandle {
@@ -20,7 +24,7 @@ namespace VFS {
         LONGLONG position;
         HANDLE archiveHandle;
         HANDLE looseFileHandle;
-        std::vector<BYTE> decompressedBuffer;
+        std::shared_ptr<const std::vector<BYTE>> decompressedData;
         bool isLooseFile;
 
         VirtualFileHandle() : entry(nullptr), position(0), archiveHandle(INVALID_HANDLE_VALUE), 
@@ -31,13 +35,24 @@ namespace VFS {
     void Shutdown();
     bool IsActive();
     void SetOriginalFunctions(void* readFile, void* setFilePointerEx, void* closeHandle);
-    void SetFindFunctions(void* findFirstW, void* findNextW, void* findClose, void* findFirstA, void* findNextA);
+    void SetFindFunctions(void* findFirstW, void* findNextW, void* findClose,
+        void* findFirstA, void* findNextA, void* findFirstExW);
 
     bool HasVirtualFile(const wchar_t* relativePath);
     bool HasVirtualFileA(const char* relativePath);
+    bool HasVirtualDirectory(const wchar_t* relativePath);
+    bool HasVirtualDirectoryA(const char* relativePath);
+    bool TryGetVirtualFileSize(const wchar_t* relativePath, ULONGLONG* size);
+    bool TryGetVirtualFileSizeA(const char* relativePath, ULONGLONG* size);
 
-    HANDLE OpenVirtualFile(const wchar_t* relativePath);
-    HANDLE OpenVirtualFileA(const char* relativePath);
+    HANDLE OpenVirtualFile(const wchar_t* relativePath,
+        DWORD desiredAccess = GENERIC_READ, DWORD shareMode = FILE_SHARE_READ,
+        DWORD creationDisposition = OPEN_EXISTING, DWORD flagsAndAttributes = FILE_ATTRIBUTE_NORMAL,
+        LPSECURITY_ATTRIBUTES securityAttributes = nullptr, HANDLE templateFile = nullptr);
+    HANDLE OpenVirtualFileA(const char* relativePath,
+        DWORD desiredAccess = GENERIC_READ, DWORD shareMode = FILE_SHARE_READ,
+        DWORD creationDisposition = OPEN_EXISTING, DWORD flagsAndAttributes = FILE_ATTRIBUTE_NORMAL,
+        LPSECURITY_ATTRIBUTES securityAttributes = nullptr, HANDLE templateFile = nullptr);
 
     bool IsVirtualHandle(HANDLE hFile);
     BOOL ReadVirtualFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead, LPDWORD lpNumberOfBytesRead, LPOVERLAPPED lpOverlapped);
@@ -47,6 +62,9 @@ namespace VFS {
     BOOL GetVirtualFileSizeEx(HANDLE hFile, PLARGE_INTEGER lpFileSize);
     BOOL CloseVirtualHandle(HANDLE hFile);
     BOOL GetVirtualFileInformationByHandle(HANDLE hFile, LPBY_HANDLE_FILE_INFORMATION lpFileInformation);
+    BOOL GetVirtualFileTime(HANDLE hFile, LPFILETIME creationTime,
+        LPFILETIME lastAccessTime, LPFILETIME lastWriteTime);
+    BOOL SetVirtualFileEnd(HANDLE hFile);
     DWORD GetVirtualFileType(HANDLE hFile);
 
     HANDLE VirtualFindFirstFileW(LPCWSTR lpFileName, LPWIN32_FIND_DATAW lpFindFileData);

@@ -1,0 +1,66 @@
+    static bool WriteAllBytes(HANDLE file, const BYTE* data, DWORD size) {
+        DWORD totalWritten = 0;
+        while (totalWritten < size) {
+            DWORD bytesWritten = 0;
+            if (!WriteFile(file, data + totalWritten, size - totalWritten, &bytesWritten, nullptr)
+                || bytesWritten == 0) {
+                return false;
+            }
+            totalWritten += bytesWritten;
+        }
+        return true;
+    }
+
+    bool ExtractFile(const wchar_t* relativePath, const wchar_t* destPath) {
+        if (!g_IsActive || !relativePath || !destPath) return false;
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        auto it = g_FileIndex.find(NormalizePath(relativePath)); if (it == g_FileIndex.end()) return false;
+        if (it->second.isLooseFile) return CopyFileW(it->second.looseFilePath.c_str(), destPath, FALSE);
+        if (g_ArchiveHandle == INVALID_HANDLE_VALUE) return false;
+
+        LARGE_INTEGER offset = {};
+        offset.QuadPart = it->second.offset;
+        if (!g_RawSetFilePointerEx(g_ArchiveHandle, offset, nullptr, FILE_BEGIN)) return false;
+
+        std::vector<BYTE> stored(it->second.size);
+        if (it->second.size > 0
+            && !ReadArchiveBytes(g_ArchiveHandle, stored.data(), it->second.size)) {
+            return false;
+        }
+
+        const BYTE* data = stored.data();
+        DWORD size = it->second.size;
+        std::vector<BYTE> decompressed;
+        if (size < it->second.decompressedSize) {
+            decompressed.resize(it->second.decompressedSize);
+            if (!DecompressData(stored, it->second.decompressedSize, decompressed.data())) return false;
+            data = decompressed.data();
+            size = it->second.decompressedSize;
+        }
+
+        wchar_t suffix[64] = {};
+        swprintf_s(suffix, L".nepgear.%08lX.%08lX.tmp", GetCurrentProcessId(), GetCurrentThreadId());
+        std::wstring tempPath = destPath;
+        tempPath += suffix;
+        DeleteFileW(tempPath.c_str());
+
+        bool wroteFile = false;
+        {
+            ScopedRawHandle destination(g_RawCreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr,
+                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+            if (destination == INVALID_HANDLE_VALUE) return false;
+            wroteFile = WriteAllBytes(destination, data, size);
+        }
+
+        if (!wroteFile || !MoveFileExW(tempPath.c_str(), destPath,
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            DeleteFileW(tempPath.c_str());
+            return false;
+        }
+        return true;
+    }
+
+    void GetVirtualFileList(std::vector<std::wstring>& list) {
+        std::lock_guard<std::recursive_mutex> lock(g_Mutex);
+        for (const auto& kv : g_FileIndex) list.push_back(kv.second.relativePath);
+    }

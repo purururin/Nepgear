@@ -1,0 +1,103 @@
+//
+// Hook Management
+//
+namespace Hooks {
+    void EnsureRioShiinaHooked() {
+        if (!Config::EnableRioShiinaHook || g_RioShiinaHooked) return;
+        HMODULE hExe = GetModuleHandleW(NULL);
+        
+        void* rioGetResAddr = Utils::FindPattern(hExe, rioGetResSignNew.data());
+        if (!rioGetResAddr) rioGetResAddr = Utils::FindPattern(hExe, rioGetResSignOld.data());
+        
+        void* rioReadFileAddr = Utils::FindPattern(hExe, rioReadFileSignNew.data());
+        if (!rioReadFileAddr) rioReadFileAddr = Utils::FindPattern(hExe, rioReadFileSignOld.data());
+
+        if (!rioGetResAddr && !rioReadFileAddr) return;
+
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+
+        if (rioReadFileAddr) {
+            orgRioReadFile = (pRioReadFile)rioReadFileAddr;
+            DetourAttach(&(PVOID&)orgRioReadFile, MyRioReadFile);
+        }
+
+        if (rioGetResAddr) {
+            orgRioGetRes = (pRioGetRes)rioGetResAddr;
+            if (Config::RioShiinaMode == 2) {
+                DetourAttach(&(PVOID&)orgRioGetRes, MyRioGetResMode2);
+                
+                // Mode 2 extra logic
+                void* pushWarcAddr = Utils::FindPattern(hExe, pushWarcStrSign.data());
+                if (pushWarcAddr) {
+                    // Search back for function start
+                    uint8_t* funcStart = nullptr;
+                    for (int i = 0; i < 0x300; i++) {
+                        if (*(uint32_t*)((uint8_t*)pushWarcAddr - i) == 0xEC8B5590) {
+                            funcStart = (uint8_t*)pushWarcAddr - i + 1; break;
+                        }
+                    }
+                    if (funcStart) {
+                        orgFindAndOpenFileInWarc = (pFindAndOpenFileInWarc)funcStart;
+                        DetourAttach(&(PVOID&)orgFindAndOpenFileInWarc, MyFindAndOpenFileInWarc);
+                        
+                        // Hook AfterDecompressCall
+                        void* pushParam = Utils::FindPatternInBlock(pushWarcAddr, 0x200, "51 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68");
+                        if (pushParam) {
+                            void* callAddr = Utils::FindPatternInBlock((uint8_t*)pushParam + 0x10, 0x10, "E8 ?? ?? ?? ?? 83 C4 14");
+                            if (callAddr) {
+                                void* target = (uint8_t*)callAddr + 5;
+#ifdef _M_IX86
+                                DetourAttach(&(PVOID&)target, MyAfterDecompressCall);
+#endif
+                            }
+                        }
+                    }
+                }
+            } else {
+                DetourAttach(&(PVOID&)orgRioGetRes, MyRioGetResMode1);
+            }
+        }
+        DetourTransactionCommit();
+        g_RioShiinaHooked = true;
+        Utils::Log("[RioShiina] Engine hooks installed (Mode %d).", Config::RioShiinaMode);
+    }
+
+    int __stdcall MyEntryPointHook() {
+        EnsureRioShiinaHooked();
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourDetach(&(PVOID&)orgEntryPoint, MyEntryPointHook);
+        DetourTransactionCommit();
+        return orgEntryPoint();
+    }
+
+    void InstallRioShiinaHook() {
+        if (!Config::EnableRioShiinaHook) return;
+
+        // Parse ArchivesToExtract
+        std::wstring archives = Config::RioShiinaArchivesToExtract;
+        size_t start = 0, end;
+        while ((end = archives.find(L'|', start)) != std::wstring::npos) {
+            archivesToExtract.insert(archives.substr(start, end - start));
+            start = end + 1;
+        }
+        if (start < archives.length()) archivesToExtract.insert(archives.substr(start));
+
+        HMODULE hExe = GetModuleHandleW(NULL);
+        MODULEINFO modInfo; GetModuleInformation(GetCurrentProcess(), hExe, &modInfo, sizeof(modInfo));
+        orgEntryPoint = (pEntryPoint)modInfo.EntryPoint;
+
+        // Install base hooks
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(&(PVOID&)orgRegOpenKeyExA, MyRegOpenKeyExA);
+        if (Config::EnableRioShiinaProcessDvd && Config::RioShiinaSpecDvdFileSize > 0) {
+            DetourAttach(&(PVOID&)orgRSCreateFileA, MyRSCreateFileA);
+            DetourAttach(&(PVOID&)orgRSSetFilePointer, MyRSSetFilePointer);
+            DetourAttach(&(PVOID&)orgRSGetFileSize, MyRSGetFileSize);
+        }
+        if (orgEntryPoint) DetourAttach(&(PVOID&)orgEntryPoint, MyEntryPointHook);
+        DetourTransactionCommit();
+    }
+}

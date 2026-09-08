@@ -1,0 +1,73 @@
+    PVOID FindPattern(HMODULE hModule, const char* signature) {
+        if (!hModule || !signature) return nullptr;
+
+        PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)hModule;
+        PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)((BYTE*)hModule + dosHeader->e_lfanew);
+        DWORD size = ntHeaders->OptionalHeader.SizeOfImage;
+        BYTE* scanBytes = (BYTE*)hModule;
+
+        std::vector<int> pattern;
+        const char* p = signature;
+        while (*p) {
+            if (*p == ' ') { p++; continue; }
+            if (*p == '?') {
+                pattern.push_back(-1);
+                p++;
+                if (*p == '?') p++;
+            } else {
+                char* end;
+                pattern.push_back((int)strtol(p, &end, 16));
+                p = end;
+            }
+        }
+
+        if (pattern.empty()) return nullptr;
+
+        size_t patternSize = pattern.size();
+        for (DWORD i = 0; i < size - patternSize; i++) {
+            bool found = true;
+            for (size_t j = 0; j < patternSize; j++) {
+                if (pattern[j] != -1 && scanBytes[i + j] != (BYTE)pattern[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) return &scanBytes[i];
+        }
+        return nullptr;
+    }
+
+    PVOID FindPatternInBlock(void* startAddress, size_t size, const char* signature) {
+        if (!startAddress || !signature || size == 0) return nullptr;
+
+        BYTE* scanBytes = (BYTE*)startAddress;
+        std::vector<int> pattern;
+        const char* p = signature;
+        while (*p) {
+            if (*p == ' ') { p++; continue; }
+            if (*p == '?') {
+                pattern.push_back(-1);
+                p++;
+                if (*p == '?') p++;
+            } else {
+                char* end;
+                pattern.push_back((int)strtol(p, &end, 16));
+                p = end;
+            }
+        }
+
+        if (pattern.empty()) return nullptr;
+
+        size_t patternSize = pattern.size();
+        for (size_t i = 0; i < size - patternSize; i++) {
+            bool found = true;
+            for (size_t j = 0; j < patternSize; j++) {
+                if (pattern[j] != -1 && scanBytes[i + j] != (BYTE)pattern[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) return &scanBytes[i];
+        }
+        return nullptr;
+    }

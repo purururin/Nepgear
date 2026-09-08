@@ -1,0 +1,129 @@
+HANDLE WINAPI newFindFirstFileW(LPCWSTR lpFileName, LPWIN32_FIND_DATAW lpFindFileData) {
+    HANDLE engineResult = INVALID_HANDLE_VALUE;
+    if (FontEngineBridge::TryFindFirstFileW(lpFileName, lpFindFileData, &engineResult)) {
+        return engineResult;
+    }
+    HANDLE result = INVALID_HANDLE_VALUE;
+    if (!Config::EnableFileHook || !VFS::IsActive()) {
+        result = orgFindFirstFileW(lpFileName, lpFindFileData);
+    } else {
+        result = VFS::VirtualFindFirstFileW(lpFileName, lpFindFileData);
+    }
+    if (result != INVALID_HANDLE_VALUE) return result;
+
+    const DWORD originalError = GetLastError();
+    if (FontEngineBridge::TryFindFirstFileFallbackW(
+        lpFileName, lpFindFileData, &engineResult)) {
+        return engineResult;
+    }
+    SetLastError(originalError);
+    return INVALID_HANDLE_VALUE;
+}
+
+BOOL WINAPI newFindNextFileW(HANDLE hFindFile, LPWIN32_FIND_DATAW lpFindFileData) {
+    if (IsVirtualHandleRange(hFindFile)) {
+        return VFS::VirtualFindNextFileW(hFindFile, lpFindFileData);
+    }
+    return orgFindNextFileW(hFindFile, lpFindFileData);
+}
+
+HANDLE WINAPI newFindFirstFileA(LPCSTR lpFileName, LPWIN32_FIND_DATAA lpFindFileData) {
+    HANDLE engineResult = INVALID_HANDLE_VALUE;
+    if (FontEngineBridge::TryFindFirstFileA(lpFileName, lpFindFileData, &engineResult)) {
+        return engineResult;
+    }
+    HANDLE result = INVALID_HANDLE_VALUE;
+    if (!Config::EnableFileHook || !VFS::IsActive()) {
+        result = orgFindFirstFileA(lpFileName, lpFindFileData);
+    } else {
+        // Preserve the caller's ANSI byte sequence for physical paths. Converting it
+        // through the configured locale can make an existing Japanese path disappear.
+        result = orgFindFirstFileA(lpFileName, lpFindFileData);
+        if (result == INVALID_HANDLE_VALUE) {
+            result = VFS::VirtualFindFirstFileA(lpFileName, lpFindFileData);
+        }
+    }
+    if (result != INVALID_HANDLE_VALUE) return result;
+
+    const DWORD originalError = GetLastError();
+    if (FontEngineBridge::TryFindFirstFileFallbackA(
+        lpFileName, lpFindFileData, &engineResult)) {
+        return engineResult;
+    }
+    SetLastError(originalError);
+    return INVALID_HANDLE_VALUE;
+}
+
+HANDLE WINAPI newFindFirstFileExW(LPCWSTR lpFileName, FINDEX_INFO_LEVELS fInfoLevelId,
+    LPVOID lpFindFileData, FINDEX_SEARCH_OPS fSearchOp, LPVOID lpSearchFilter,
+    DWORD dwAdditionalFlags) {
+    HANDLE engineResult = INVALID_HANDLE_VALUE;
+    if (FontEngineBridge::TryFindFirstFileExW(lpFileName, fInfoLevelId,
+        lpFindFileData, fSearchOp, lpSearchFilter, dwAdditionalFlags,
+        &engineResult)) {
+        return engineResult;
+    }
+    HANDLE result = INVALID_HANDLE_VALUE;
+    if (Config::EnableFileHook && VFS::IsActive()
+        && (fInfoLevelId == FindExInfoStandard || fInfoLevelId == FindExInfoBasic)
+        && fSearchOp == FindExSearchNameMatch) {
+        result = VFS::VirtualFindFirstFileW(
+            lpFileName, static_cast<LPWIN32_FIND_DATAW>(lpFindFileData));
+    } else {
+        result = orgFindFirstFileExW(lpFileName, fInfoLevelId, lpFindFileData,
+            fSearchOp, lpSearchFilter, dwAdditionalFlags);
+    }
+    if (result != INVALID_HANDLE_VALUE) return result;
+
+    const DWORD originalError = GetLastError();
+    if (FontEngineBridge::TryFindFirstFileExFallbackW(lpFileName,
+        fInfoLevelId, lpFindFileData, fSearchOp, &engineResult)) {
+        return engineResult;
+    }
+    SetLastError(originalError);
+    return INVALID_HANDLE_VALUE;
+}
+
+HANDLE WINAPI newFindFirstFileExA(LPCSTR lpFileName, FINDEX_INFO_LEVELS fInfoLevelId,
+    LPVOID lpFindFileData, FINDEX_SEARCH_OPS fSearchOp, LPVOID lpSearchFilter,
+    DWORD dwAdditionalFlags) {
+    HANDLE engineResult = INVALID_HANDLE_VALUE;
+    if (FontEngineBridge::TryFindFirstFileExA(lpFileName, fInfoLevelId,
+        lpFindFileData, fSearchOp, lpSearchFilter, dwAdditionalFlags,
+        &engineResult)) {
+        return engineResult;
+    }
+    HANDLE physicalResult = orgFindFirstFileExA(lpFileName, fInfoLevelId, lpFindFileData,
+        fSearchOp, lpSearchFilter, dwAdditionalFlags);
+    if (physicalResult != INVALID_HANDLE_VALUE) {
+        return physicalResult;
+    }
+    const DWORD physicalError = GetLastError();
+    if (Config::EnableFileHook && VFS::IsActive()
+        && (fInfoLevelId == FindExInfoStandard || fInfoLevelId == FindExInfoBasic)
+        && fSearchOp == FindExSearchNameMatch) {
+        HANDLE virtualResult = VFS::VirtualFindFirstFileA(
+            lpFileName, static_cast<LPWIN32_FIND_DATAA>(lpFindFileData));
+        if (virtualResult != INVALID_HANDLE_VALUE) return virtualResult;
+    }
+    if (FontEngineBridge::TryFindFirstFileExFallbackA(lpFileName,
+        fInfoLevelId, lpFindFileData, fSearchOp, &engineResult)) {
+        return engineResult;
+    }
+    SetLastError(physicalError);
+    return INVALID_HANDLE_VALUE;
+}
+
+BOOL WINAPI newFindNextFileA(HANDLE hFindFile, LPWIN32_FIND_DATAA lpFindFileData) {
+    if (IsVirtualHandleRange(hFindFile)) {
+        return VFS::VirtualFindNextFileA(hFindFile, lpFindFileData);
+    }
+    return orgFindNextFileA(hFindFile, lpFindFileData);
+}
+
+BOOL WINAPI newFindClose(HANDLE hFindFile) {
+    if (IsVirtualHandleRange(hFindFile)) {
+        return VFS::VirtualFindClose(hFindFile);
+    }
+    return orgFindClose(hFindFile);
+}

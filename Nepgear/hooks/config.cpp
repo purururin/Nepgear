@@ -9,19 +9,82 @@
 namespace Config {
 
     bool    IsSystemEnabled = true;
+    bool    ShowStartupPopup = true;
     bool    EnableFontHook = false;
     wchar_t FontFileName[MAX_PATH] = { 0 };
     wchar_t ForcedFontNameW[64] = { 0 };
+    wchar_t SourceFontNameW[64] = { 0 };
     char    ForcedFontNameA[64] = { 0 };
     DWORD   ForcedCharset = DEFAULT_CHARSET;
     bool    EnableFaceNameReplace = true;
     bool    EnableCharsetReplace = false;
     bool    EnableFontHeightScale = false;
-    double  FontHeightScale = 1.0;
+    float   FontHeightScale = 1.0f;
     bool    EnableFontWidthScale = false;
-    double  FontWidthScale = 1.0;
+    float   FontWidthScale = 1.0f;
     bool    EnableFontWeight = false;
     int     FontWeight = 0;
+    bool    EnableFontCharSpacing = false;
+    int     FontCharSpacing = 0;
+    bool    EnableFontVerticalMetrics = false;
+    int     FontAscentPermille = 880;
+    int     FontDescentPermille = -120;
+    bool    EnableFontLineSpacing = false;
+    int     FontLineSpacing = 0;
+    bool    EnableCodepageRuntimeReplace = false;
+    bool    EnableCodepageRedirect = false;
+    UINT    CodepageRedirectFrom = 932;
+    UINT    CodepageRedirectTo = CP_UTF8;
+    bool    EnableTextSubstitution = false;
+    int     TextSubstitutionMode = TextSubstitutionModeJapaneseTraditional;
+    UINT    TextSubstitutionCodepage = 932;
+    UINT    YurisAtlasCodepage = 0;
+
+    bool    CompatSkipDrawTextA = true;
+    bool    CompatSkipFontDataQueries = true;
+    bool    CompatSelectObjectTrackedOnly = false;
+    bool    CompatHookCreateFontW = true;
+    bool    CompatHookCreateFontIndirectW = true;
+    bool    CompatHookGetTextFace = false;
+
+    bool    EnableBgiHook = false;
+    bool    BgiPatchGdiImports = true;
+    bool    BgiClearGlyphCacheOnSwitch = true;
+    bool    EnableArtemisHook = false;
+    bool    ArtemisPatchTables = true;
+    bool    ArtemisRedirectFontFiles = true;
+    bool    ArtemisClearFontCacheOnSwitch = true;
+    wchar_t ArtemisFontPath[MAX_PATH] = { 0 };
+    int     ArtemisFontSize = 0;
+    int     ArtemisRubySize = -1;
+    bool    EnableKrkrHook = false;
+    bool    KrkrDisablePrerenderedFonts = true;
+    bool    EnableEntisHook = false;
+    bool    EntisDisableBitmapFonts = true;
+    bool    EntisRefreshFontOnSwitch = true;
+    bool    EnableSoftpalHook = false;
+    bool    SoftpalDisableDefaultFontDat = true;
+    bool    SoftpalForceDefaultOptionToSystemFont = true;
+    bool    EnableEscudeHook = false;
+    bool    EscudeVirtualFontConfig = true;
+    bool    EnableMiraiHook = false;
+    bool    MiraiReplaceFontDataQueries = true;
+    bool    MiraiRedirectFontFiles = true;
+    bool    MiraiPinFontDataSource = true;
+    bool    EnableMajiroHook = false;
+    bool    MajiroDisableFontCache = true;
+    bool    EnableDxLibHook = false;
+    bool    DxLibDisableFontCache = false;
+    bool    DxLibReplaceFontDataQueries = true;
+    bool    DxLibClearRuntimeFontCacheOnSwitch = false;
+    wchar_t DxLibCachedFontNameW[LF_FACESIZE] = { 0 };
+    bool    EnableTinkerBellHook = false;
+    bool    EnableCatSystemUnityHook = false;
+    bool    EnableTyranoHook = false;
+    bool    TyranoRedirectWebFonts = true;
+    bool    EnableRenPyHook = false;
+    bool    RenPyRedirectFonts = true;
+    bool    RenPyRefreshFontOnSwitch = true;
 
     bool    EnableWindowTitleHook = false;
     int     WindowTitleMode = 2;
@@ -59,14 +122,15 @@ namespace Config {
     UINT    ToCodePage = 0;
 
     DWORD   DetectedCharset = 1;
-    bool    NeedFontReload = false;
-    LONG    ConfigVersion = 1;
+    volatile LONG NeedFontReload = 0;
+    volatile LONG ConfigVersion = 1;
 
     bool    EnableDebug = false;
     bool    EnableLogToFile = false;
-
-    bool    EnableMedFix = false;
-    bool    EnableMajiroFix = false;
+    bool    EnableDebugLog = false;
+    int     DebugSlowMs = 50;
+    int     DebugTraceSampleLimit = 0;
+    int     DebugPickerThreadLogLimit = 0;
 
     wchar_t IniFileName[MAX_PATH] = L"Nepgear.ini";
 
@@ -100,11 +164,13 @@ namespace Config {
 
         IsSystemEnabled = GetPrivateProfileIntW(L"System", L"Enable", 1, ini) != 0;
         if (!IsSystemEnabled) return;
+        ShowStartupPopup = GetPrivateProfileIntW(L"System", L"ShowStartupPopup", 1, ini) != 0;
 
 
         EnableFontHook = GetPrivateProfileIntW(L"Font", L"Enable", 0, ini) != 0;
         GetPrivateProfileStringW(L"Font", L"FileName", L"", FontFileName, MAX_PATH, ini);
         GetPrivateProfileStringW(L"Font", L"FaceName", L"", ForcedFontNameW, 64, ini);
+        wcsncpy_s(SourceFontNameW, ForcedFontNameW, _TRUNCATE);
         WCharToChar(ForcedFontNameW, ForcedFontNameA, 64);
         ForcedCharset = GetPrivateProfileIntW(L"Font", L"Charset", DEFAULT_CHARSET, ini);
         EnableFaceNameReplace = GetPrivateProfileIntW(L"Font", L"EnableFaceNameReplace", 1, ini) != 0;
@@ -113,16 +179,33 @@ namespace Config {
         EnableFontHeightScale = GetPrivateProfileIntW(L"Font", L"EnableHeightScale", 0, ini) != 0;
         wchar_t scaleBuffer[32];
         GetPrivateProfileStringW(L"Font", L"HeightScale", L"1.0", scaleBuffer, 32, ini);
-        FontHeightScale = _wtof(scaleBuffer);
-        if (FontHeightScale <= 0.0) FontHeightScale = 1.0;
+        FontHeightScale = (float)_wtof(scaleBuffer);
+        if (FontHeightScale <= 0.0f) FontHeightScale = 1.0f;
 
         EnableFontWidthScale = GetPrivateProfileIntW(L"Font", L"EnableWidthScale", 0, ini) != 0;
         GetPrivateProfileStringW(L"Font", L"WidthScale", L"1.0", scaleBuffer, 32, ini);
-        FontWidthScale = _wtof(scaleBuffer);
-        if (FontWidthScale <= 0.0) FontWidthScale = 1.0;
+        FontWidthScale = (float)_wtof(scaleBuffer);
+        if (FontWidthScale <= 0.0f) FontWidthScale = 1.0f;
 
         EnableFontWeight = GetPrivateProfileIntW(L"Font", L"EnableWeight", 0, ini) != 0;
         FontWeight = GetPrivateProfileIntW(L"Font", L"Weight", 0, ini);
+
+        EnableFontCharSpacing = GetPrivateProfileIntW(L"Font", L"EnableCharSpacing", 0, ini) != 0;
+        FontCharSpacing = GetPrivateProfileIntW(L"Font", L"CharSpacing", 0, ini);
+        EnableFontVerticalMetrics = GetPrivateProfileIntW(L"Font", L"EnableVerticalMetrics", 0, ini) != 0;
+        FontAscentPermille = GetPrivateProfileIntW(L"Font", L"AscentPermille", 880, ini);
+        FontDescentPermille = GetPrivateProfileIntW(L"Font", L"DescentPermille", -120, ini);
+        EnableFontLineSpacing = GetPrivateProfileIntW(L"Font", L"EnableLineSpacing", 0, ini) != 0;
+        FontLineSpacing = GetPrivateProfileIntW(L"Font", L"LineSpacing", 0, ini);
+        EnableCodepageRuntimeReplace = GetPrivateProfileIntW(L"Font", L"EnableCodepageRuntimeReplace", 0, ini) != 0;
+        EnableTextSubstitution = GetPrivateProfileIntW(L"Font", L"EnableTextSubstitution", 0, ini) != 0;
+        TextSubstitutionMode = GetPrivateProfileIntW(L"Font", L"TextSubstitutionMode",
+            TextSubstitutionModeJapaneseTraditional, ini);
+        if (TextSubstitutionMode < TextSubstitutionModeJapaneseTraditional ||
+            TextSubstitutionMode > TextSubstitutionModeSimplifiedToTraditional) {
+            TextSubstitutionMode = TextSubstitutionModeJapaneseTraditional;
+        }
+        TextSubstitutionCodepage = GetPrivateProfileIntW(L"Font", L"TextSubstitutionCodepage", 932, ini);
 
         EnableCodepageSpoof = GetPrivateProfileIntW(L"Font", L"EnableCodepageSpoof", 0, ini) != 0;
         SpoofFromCharset = GetPrivateProfileIntW(L"Font", L"SpoofFromCharset", 128, ini);
@@ -131,6 +214,7 @@ namespace Config {
 
         EnableWindowTitleHook = GetPrivateProfileIntW(L"Window", L"Enable", 0, ini) != 0;
         WindowTitleMode = GetPrivateProfileIntW(L"Window", L"TitleMode", 2, ini);
+        if (WindowTitleMode < 0 || WindowTitleMode > 2) WindowTitleMode = 2;
         GetPrivateProfileStringW(L"Window", L"Title", L"", CustomTitleW, 256, ini);
         WCharToChar(CustomTitleW, CustomTitleA, 256);
 
@@ -168,10 +252,68 @@ namespace Config {
         EnableCodePageHook = GetPrivateProfileIntW(L"CodePage", L"Enable", 0, ini) != 0;
         FromCodePage = GetPrivateProfileIntW(L"CodePage", L"FromCodePage", 0, ini);
         ToCodePage = GetPrivateProfileIntW(L"CodePage", L"ToCodePage", 0, ini);
+        EnableCodepageRedirect = EnableCodePageHook;
+        CodepageRedirectFrom = FromCodePage;
+        CodepageRedirectTo = ToCodePage;
+
+        CompatSkipDrawTextA = GetPrivateProfileIntW(L"FontCompatibility", L"SkipDrawTextA", 1, ini) != 0;
+        CompatSkipFontDataQueries = GetPrivateProfileIntW(L"FontCompatibility", L"SkipFontDataQueries", 1, ini) != 0;
+        CompatSelectObjectTrackedOnly = GetPrivateProfileIntW(L"FontCompatibility", L"SelectObjectTrackedOnly", 0, ini) != 0;
+        CompatHookCreateFontW = GetPrivateProfileIntW(L"FontCompatibility", L"HookCreateFontW", 1, ini) != 0;
+        CompatHookCreateFontIndirectW = GetPrivateProfileIntW(L"FontCompatibility", L"HookCreateFontIndirectW", 1, ini) != 0;
+        CompatHookGetTextFace = GetPrivateProfileIntW(L"FontCompatibility", L"HookGetTextFace", 0, ini) != 0;
+
+        EnableBgiHook = GetPrivateProfileIntW(L"FontEngines", L"EnableBgiHook", 0, ini) != 0;
+        BgiPatchGdiImports = GetPrivateProfileIntW(L"FontEngines", L"BgiPatchGdiImports", 1, ini) != 0;
+        BgiClearGlyphCacheOnSwitch = GetPrivateProfileIntW(L"FontEngines", L"BgiClearGlyphCacheOnSwitch", 1, ini) != 0;
+        EnableArtemisHook = GetPrivateProfileIntW(L"FontEngines", L"EnableArtemis", 0, ini) != 0;
+        ArtemisPatchTables = GetPrivateProfileIntW(L"FontEngines", L"ArtemisPatchTables", 1, ini) != 0;
+        ArtemisRedirectFontFiles = GetPrivateProfileIntW(L"FontEngines", L"ArtemisRedirectFontFiles", 1, ini) != 0;
+        ArtemisClearFontCacheOnSwitch = GetPrivateProfileIntW(L"FontEngines", L"ArtemisClearFontCacheOnSwitch", 1, ini) != 0;
+        GetPrivateProfileStringW(L"FontEngines", L"ArtemisFontPath", L"", ArtemisFontPath, MAX_PATH, ini);
+        ArtemisFontSize = GetPrivateProfileIntW(L"FontEngines", L"ArtemisFontSize", 0, ini);
+        ArtemisRubySize = GetPrivateProfileIntW(L"FontEngines", L"ArtemisRubySize", -1, ini);
+        EnableKrkrHook = GetPrivateProfileIntW(L"FontEngines", L"EnableKrkr", 0, ini) != 0;
+        KrkrDisablePrerenderedFonts = GetPrivateProfileIntW(L"FontEngines", L"KrkrDisablePrerenderedFonts", 1, ini) != 0;
+        EnableEntisHook = GetPrivateProfileIntW(L"FontEngines", L"EnableEntisHook", 0, ini) != 0;
+        EntisDisableBitmapFonts = GetPrivateProfileIntW(L"FontEngines", L"EntisDisableBitmapFonts", 1, ini) != 0;
+        EntisRefreshFontOnSwitch = GetPrivateProfileIntW(L"FontEngines", L"EntisRefreshFontOnSwitch", 1, ini) != 0;
+        EnableSoftpalHook = GetPrivateProfileIntW(L"FontEngines", L"EnableSoftpal", 0, ini) != 0;
+        SoftpalDisableDefaultFontDat = GetPrivateProfileIntW(L"FontEngines", L"SoftpalDisableDefaultFontDat", 1, ini) != 0;
+        SoftpalForceDefaultOptionToSystemFont = GetPrivateProfileIntW(L"FontEngines", L"SoftpalForceDefaultOptionToSystemFont", 1, ini) != 0;
+        EnableEscudeHook = GetPrivateProfileIntW(L"FontEngines", L"EnableEscude", 0, ini) != 0;
+        EscudeVirtualFontConfig = GetPrivateProfileIntW(L"FontEngines", L"EscudeVirtualFontConfig", 1, ini) != 0;
+        EnableMiraiHook = GetPrivateProfileIntW(L"FontEngines", L"EnableMirai", 0, ini) != 0;
+        MiraiReplaceFontDataQueries = GetPrivateProfileIntW(L"FontEngines", L"MiraiReplaceFontDataQueries", 1, ini) != 0;
+        MiraiRedirectFontFiles = GetPrivateProfileIntW(L"FontEngines", L"MiraiRedirectFontFiles", 1, ini) != 0;
+        MiraiPinFontDataSource = GetPrivateProfileIntW(L"FontEngines", L"MiraiPinFontDataSource", 1, ini) != 0;
+        EnableMajiroHook = GetPrivateProfileIntW(L"FontEngines", L"EnableMajiro", 0, ini) != 0;
+        MajiroDisableFontCache = GetPrivateProfileIntW(L"FontEngines", L"MajiroDisableFontCache", 1, ini) != 0;
+        EnableDxLibHook = GetPrivateProfileIntW(L"FontEngines", L"EnableDxLib", 0, ini) != 0;
+        DxLibDisableFontCache = GetPrivateProfileIntW(L"FontEngines", L"DxLibDisableFontCache", 0, ini) != 0;
+        DxLibReplaceFontDataQueries = GetPrivateProfileIntW(L"FontEngines", L"DxLibReplaceFontDataQueries", 1, ini) != 0;
+        DxLibClearRuntimeFontCacheOnSwitch = GetPrivateProfileIntW(L"FontEngines", L"DxLibClearRuntimeFontCacheOnSwitch", 0, ini) != 0;
+        GetPrivateProfileStringW(L"FontEngines", L"DxLibCachedFontName", L"", DxLibCachedFontNameW, LF_FACESIZE, ini);
+        EnableTinkerBellHook = GetPrivateProfileIntW(L"FontEngines", L"EnableTinkerBell", 0, ini) != 0;
+        EnableCatSystemUnityHook = GetPrivateProfileIntW(L"FontEngines", L"EnableCatSystemUnityHook", 0, ini) != 0;
+        EnableTyranoHook = GetPrivateProfileIntW(L"FontEngines", L"EnableTyranoHook", 0, ini) != 0;
+        TyranoRedirectWebFonts = GetPrivateProfileIntW(L"FontEngines", L"TyranoRedirectWebFonts", 1, ini) != 0;
+        EnableRenPyHook = GetPrivateProfileIntW(L"FontEngines", L"EnableRenPyHook", 0, ini) != 0;
+        RenPyRedirectFonts = GetPrivateProfileIntW(L"FontEngines", L"RenPyRedirectFonts", 1, ini) != 0;
+        RenPyRefreshFontOnSwitch = GetPrivateProfileIntW(L"FontEngines", L"RenPyRefreshFontOnSwitch", 1, ini) != 0;
+        {
+            int codepage = GetPrivateProfileIntW(L"FontEngines", L"YurisAtlasCodepage", 0, ini);
+            YurisAtlasCodepage = codepage > 0 && IsValidCodePage((UINT)codepage)
+                ? (UINT)codepage : 0;
+        }
 
 
         EnableDebug    = GetPrivateProfileIntW(L"Debug", L"Enable",    0, ini) != 0;
         EnableLogToFile = GetPrivateProfileIntW(L"Debug", L"LogToFile", 0, ini) != 0;
+        EnableDebugLog = GetPrivateProfileIntW(L"Debug", L"EnableFontTrace", EnableDebug ? 1 : 0, ini) != 0;
+        DebugSlowMs = GetPrivateProfileIntW(L"Debug", L"FontSlowMs", 50, ini);
+        DebugTraceSampleLimit = GetPrivateProfileIntW(L"Debug", L"FontTraceSampleLimit", 0, ini);
+        DebugPickerThreadLogLimit = 0;
         
 
         if (EnableDebug) {
@@ -179,7 +321,5 @@ namespace Config {
             Utils::Log("[Config] Window Title Mode: %d, Custom Title: %ls", WindowTitleMode, CustomTitleW);
         }
 
-        EnableMedFix = GetPrivateProfileIntW(L"GLOBAL", L"MED", 0, ini) != 0;
-        EnableMajiroFix = GetPrivateProfileIntW(L"GLOBAL", L"MAJIRO", 0, ini) != 0;
     }
 }

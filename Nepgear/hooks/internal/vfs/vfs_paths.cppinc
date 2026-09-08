@@ -1,0 +1,114 @@
+
+// Utility Functions
+static std::wstring NormalizePath(const wchar_t* path) {
+    if (!path || path[0] == L'\0') return L"";
+    
+    std::wstring normalized;
+    normalized.reserve(MAX_PATH);
+    
+    // Skip leading backslashes
+    const wchar_t* p = path;
+    while (*p == L'\\' || *p == L'/') p++;
+    
+    for (; *p != L'\0'; ++p) {
+        wchar_t c = *p;
+        if (c == L'/') c = L'\\';
+        else if (c >= L'A' && c <= L'Z') c += (L'a' - L'A');
+        normalized += c;
+    }
+    return normalized;
+}
+
+static std::wstring NormalizePathA(const char* path) {
+    if (!path || path[0] == '\0') return L"";
+    const UINT candidates[] = { Config::LE_Codepage, CP_ACP, CP_UTF8 };
+    UINT previous = static_cast<UINT>(-1);
+    for (UINT codepage : candidates) {
+        if (codepage == previous) continue;
+        previous = codepage;
+        wchar_t wpath[MAX_PATH] = {};
+        const DWORD flags = codepage == CP_UTF8 ? MB_ERR_INVALID_CHARS : 0;
+        if (MultiByteToWideChar(codepage, flags, path, -1, wpath, MAX_PATH)) {
+            return NormalizePath(wpath);
+        }
+    }
+    return L"";
+}
+
+static bool IsReservedInternalPath(const std::wstring& path) {
+    const std::wstring normalized = NormalizePath(path.c_str());
+    static const std::wstring moduleCache = L".module-cache";
+    return normalized == moduleCache
+        || (normalized.size() > moduleCache.size()
+            && normalized.compare(0, moduleCache.size(), moduleCache) == 0
+            && normalized[moduleCache.size()] == L'\\');
+}
+
+static void RebuildDirectoryIndex() {
+    g_DirectoryIndex.clear();
+    for (auto& kv : g_FileIndex) {
+        std::wstring path = kv.second.relativePath;
+        std::replace(path.begin(), path.end(), L'/', L'\\');
+        
+        size_t lastSlash = path.find_last_of(L'\\');
+        std::wstring dir;
+        if (lastSlash != std::wstring::npos) {
+            dir = NormalizePath(path.substr(0, lastSlash).c_str());
+        } else {
+            dir = L""; // Root
+        }
+        g_DirectoryIndex[dir].push_back(&kv.second);
+    }
+}
+
+static bool DecompressData(const std::vector<BYTE>& input, DWORD decompressedSize, PBYTE output) {
+    CompressionApi::LzmsDecompressor decompressor;
+    size_t actualDecompressedSize = 0;
+    return decompressor.Decompress(
+        input.data(), input.size(), output, decompressedSize, &actualDecompressedSize)
+        && actualDecompressedSize == decompressedSize;
+}
+
+static void ScanLooseFiles(const wchar_t* basePath, const wchar_t* currentPath, const wchar_t* relativeBase) {
+    wchar_t searchPath[MAX_PATH];
+    wcscpy_s(searchPath, currentPath);
+    PathAppendW(searchPath, L"*");
+
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind = FindFirstFileW(searchPath, &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    do {
+        if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+
+        wchar_t fullPath[MAX_PATH];
+        wcscpy_s(fullPath, currentPath);
+        PathAppendW(fullPath, fd.cFileName);
+
+        wchar_t relativePath[MAX_PATH];
+        if (relativeBase[0] == L'\0') wcscpy_s(relativePath, fd.cFileName);
+        else {
+            wcscpy_s(relativePath, relativeBase);
+            PathAppendW(relativePath, fd.cFileName);
+        }
+
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (IsReservedInternalPath(relativePath)) continue;
+            ScanLooseFiles(basePath, fullPath, relativePath);
+        } else {
+            VFS::VirtualFileEntry entry;
+            entry.relativePath = relativePath;
+            entry.offset = 0;
+            entry.size = fd.nFileSizeLow;
+            entry.decompressedSize = fd.nFileSizeLow;
+            entry.isLooseFile = true;
+            entry.looseFilePath = fullPath;
+            entry.creationTime = fd.ftCreationTime;
+            entry.lastAccessTime = fd.ftLastAccessTime;
+            entry.lastWriteTime = fd.ftLastWriteTime;
+
+            g_FileIndex[NormalizePath(relativePath)] = entry;
+        }
+    } while (FindNextFileW(hFind, &fd));
+    FindClose(hFind);
+}
