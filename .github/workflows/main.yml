@@ -1,0 +1,62 @@
+name: Build Windows Binaries
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    # --- Build 64-bit ---
+    - name: Build x64
+      run: .\build_x64.bat
+      shell: cmd
+      env:
+        # Prevent the script from pausing at the end in CI
+        NEPGEAR_NO_PAUSE: 1
+
+    # --- Build 32-bit ---
+    - name: Build x86
+      run: .\build_x86.bat
+      shell: cmd
+      env:
+        NEPGEAR_NO_PAUSE: 1
+
+    # --- Verify outputs exist ---
+    # This step fails fast if the expected DLLs are missing, so you don't
+    # silently upload empty artifacts.
+    - name: Verify build outputs
+      shell: cmd
+      run: |
+        if not exist "x64\Release\winmm.dll" (
+          echo ERROR: x64\Release\winmm.dll was not produced.
+          exit /b 1
+        )
+        if not exist "Release\winmm.dll" (
+          echo ERROR: Release\winmm.dll was not produced.
+          exit /b 1
+        )
+        echo Build outputs verified.
+
+    # --- Upload Artifacts ---
+    - name: Upload x64 Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Nepgear-x64
+        path: x64/Release/winmm.dll
+        if-no-files-found: error
+
+    - name: Upload x86 Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Nepgear-x86
+        path: Release/winmm.dll
+        if-no-files-found: error
